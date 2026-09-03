@@ -187,7 +187,7 @@ COMPLETED, CANCELLED, EXPIRED는 최종 상태입니다. 같은 명령이 반복
 | Area | Technology |
 |---|---|
 | Language | Java 21 |
-| Framework | Spring Boot 3.x |
+| Framework | Spring Boot 4.x |
 | Persistence | Spring Data JPA, MySQL 8 |
 | Reservation | Redis, Lua Script |
 | Messaging | Apache Kafka |
