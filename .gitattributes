@@ -1,0 +1,19 @@
+# 기본: 텍스트 파일은 저장소와 체크아웃 모두 LF
+* text=auto eol=lf
+
+# Windows 전용 스크립트는 CRLF 유지
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Gradle wrapper 스크립트는 반드시 LF
+gradlew text eol=lf
+
+# 바이너리
+*.jar binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
