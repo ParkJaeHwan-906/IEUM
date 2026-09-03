@@ -2,6 +2,7 @@ package com.hwannee.ieum.reviews.domain;
 
 import com.hwannee.ieum.common.domain.BaseTimeEntity;
 import com.hwannee.ieum.orders.domain.UsersOrders;
+import com.hwannee.ieum.stores.domain.Stores;
 import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -11,7 +12,7 @@ import java.time.LocalDateTime;
 
 @Entity
 @Getter
-@Table(name = "items_reviews")
+@Table(name = "items_reviews", indexes = @Index(name = "idx_items_reviews_store_id", columnList = "store_id"))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class ItemsReviews extends BaseTimeEntity {
 
@@ -22,6 +23,10 @@ public class ItemsReviews extends BaseTimeEntity {
     @OneToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "user_order_id", nullable = false, unique = true)
     private UsersOrders usersOrder;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "store_id", nullable = false)
+    private Stores store;
 
     @Column(name = "img_url", length = 500)
     private String imgUrl;
@@ -38,6 +43,7 @@ public class ItemsReviews extends BaseTimeEntity {
     public ItemsReviews(UsersOrders usersOrder, String imgUrl, String content, Integer rating) {
         validateRating(rating);
         this.usersOrder = usersOrder;
+        this.store = usersOrder.getStoresItem().getStore();
         this.imgUrl = imgUrl;
         this.content = content;
         this.rating = rating;
