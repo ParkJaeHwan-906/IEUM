@@ -1,0 +1,14 @@
+### Environment ###
+.env
+.env.*
+!.env.example
+
+### IDE ###
+.idea/
+*.iws
+*.iml
+*.ipr
+
+### OS ###
+.DS_Store
+Thumbs.db
