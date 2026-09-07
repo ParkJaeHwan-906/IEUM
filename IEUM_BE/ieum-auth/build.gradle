@@ -1,0 +1,13 @@
+plugins { id 'org.springframework.boot' }
+dependencies {
+    implementation project(':ieum-domain')
+    implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation 'org.springframework.security:spring-security-oauth2-jose'
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+    testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+}
+tasks.named('bootRun') { workingDir = rootProject.projectDir }

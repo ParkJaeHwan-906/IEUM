@@ -1,1 +1,4 @@
 rootProject.name = 'IEUM'
+include 'ieum-domain'
+include 'ieum-auth'
+include 'ieum-api'
