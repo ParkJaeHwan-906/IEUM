@@ -1,0 +1,64 @@
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: ieum-auth
+
+  datasource:
+    url: "jdbc:mysql://${DB_HOST:localhost}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:ieum}?serverTimezone=Asia/Seoul&characterEncoding=UTF-8"
+    username: ${MYSQL_USER}
+    password: ${MYSQL_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      pool-name: IeumAuthHikariPool
+      # 로그인/가입 트래픽만 받으므로 API 서버보다 작게 잡는다
+      maximum-pool-size: ${AUTH_DB_POOL_SIZE:5}
+      minimum-idle: 2
+      connection-timeout: 3000
+      validation-timeout: 2000
+      max-lifetime: 270000
+
+  jpa:
+    hibernate:
+      ddl-auto: ${JPA_DDL_AUTO:update}
+    open-in-view: false
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: Asia/Seoul
+        format_sql: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+      timeout: 2000ms
+      connect-timeout: 2000ms
+
+  jackson:
+    time-zone: Asia/Seoul
+    default-property-inclusion: non_null
+
+  mvc:
+    problemdetails:
+      enabled: true
+
+server:
+  port: ${AUTH_SERVER_PORT:8081}
+
+ieum:
+  auth:
+    # 토큰의 iss 클레임. API 서버의 issuer-uri 와 같아야 한다
+    issuer: ${JWT_ISSUER:http://localhost:8081}
+    # Base64 PKCS#8 DER. 비우면 기동 시 임시 키를 만든다 (scripts/gen-jwt-key.sh)
+    private-key: ${JWT_PRIVATE_KEY:}
+    access-token-ttl: ${ACCESS_TOKEN_TTL:PT15M}
+    refresh-token-ttl: ${REFRESH_TOKEN_TTL:P14D}
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+
+logging:
+  level:
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:debug}
+    org.hibernate.orm.jdbc.bind: ${SQL_BIND_LOG_LEVEL:trace}

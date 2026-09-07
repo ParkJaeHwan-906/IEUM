@@ -9,7 +9,7 @@ IEUM 백엔드 작업 목록. 완료된 항목은 체크하고, 배경 설명이
 - [x] 도메인 엔티티 및 리포지토리 정의
 - [x] 로컬 개발 환경 (Docker Compose - MySQL 8.4, Redis 7.4)
 - [x] 환경변수 외부화 (`.env` + `application.yaml` 플레이스홀더)
-- [ ] **인증/인가** ← 현재 단계
+- [~] **인증/인가** ← 현재 단계 (모듈 분리·서명 키·JWKS 완료, 발급 API·API 서버 검증 진행 중)
 - [ ] 예약 도메인 로직
 - [ ] 부하 테스트 및 관측
 - [ ] V2 - Kafka 예약 대기열
@@ -19,31 +19,42 @@ IEUM 백엔드 작업 목록. 완료된 항목은 체크하고, 배경 설명이
 
 ## 1. 인증 / 인가
 
-설계 배경과 대안 검토는 [ADR-0001](./adr/0001-authentication.md) 참조.
+설계 배경과 대안 검토는 [ADR-0001](./adr/0001-authentication.md), 구현 순서와 함정은
+[구현 가이드](./guides/auth-implementation-guide.md) 참조.
 
-현재 `spring-boot-starter-security` 의존성은 있으나 `SecurityConfig` 가 없어,
-모든 엔드포인트가 Spring Security 기본 설정(자동 생성 비밀번호 + httpBasic)으로 막혀 있는 상태입니다.
+인증 서버를 별도 프로세스로 분리하기로 했습니다 (Kubernetes 에서 인증 서버 1개, API Pod 는 서명 검증만).
+저장소는 세 모듈로 나뉘었고, 로컬에서는 `ieum-auth`(8081) 와 `ieum-api`(8080) 를 둘 다 띄웁니다.
+
+~~~text
+ieum-domain/   엔티티·리포지토리 (공유)
+ieum-auth/     인증 서버 — com.hwannee.ieum.auth.issue
+ieum-api/      API 서버  — com.hwannee.ieum.auth.verify
+~~~
+
+- [ ] ADR-0002 작성 — ADR-0001 의 "프로세스는 나누지 않는다"를 수정하는 기록
 
 ### 1.1 기반
 
+- [x] Gradle 멀티모듈 분리 (`ieum-domain`, `ieum-auth`, `ieum-api`)
 - [ ] `SecurityConfig` 작성
-  - [ ] `anyRequest().authenticated()` — default-deny
-  - [ ] `permitAll` 허용 목록 명시 (회원가입, 로그인, 상품 조회, actuator health)
-  - [ ] `SessionCreationPolicy.STATELESS`
-  - [ ] CSRF 비활성 (세션을 쓰지 않으므로)
-  - [ ] CORS 설정 (프론트엔드 오리진)
-- [ ] JWT 라이브러리 선정 — `spring-boot-starter-oauth2-resource-server` vs `jjwt`
-  - 전자는 검증기가 내장이라 직접 구현할 코드가 적음
-- [ ] 서명 키 관리 — 대칭키(HS256) vs 비대칭키(RS256)
-  - 인증 서버 분리 가능성을 열어두려면 RS256
-  - 키는 `.env` 로 주입, 저장소에 커밋 금지
+  - [x] 인증 서버 — `anyRequest().denyAll()`, `/auth/*`·JWKS·health 만 `permitAll`
+  - [ ] API 서버 — `anyRequest().authenticated()`, 상품 조회·health 만 `permitAll`
+  - [x] `SessionCreationPolicy.STATELESS` (인증 서버)
+  - [x] CSRF 비활성 (인증 서버)
+  - [x] CORS 설정 (인증 서버, `CORS_ALLOWED_ORIGINS`)
+- [x] JWT 라이브러리 — 검증은 `spring-boot-starter-oauth2-resource-server`, 발급은 `spring-security-oauth2-jose` 의 `NimbusJwtEncoder`
+- [x] 서명 키 — RS256. `JwtKeyConfig` 가 `JWT_PRIVATE_KEY`(Base64 PKCS#8) 를 읽고 공개키를 복원
+  - 키가 없으면 임시 키 생성 + WARN. 재시작 시 토큰 무효
+  - [ ] `scripts/gen-jwt-key.sh` 작성 (가이드 3.2)
+- [x] JWKS 공개 — `GET /.well-known/jwks.json`, 공개키만 노출 확인
+- [ ] `AuthExceptionAdvice` — `ProblemDetailAuthHandlers` 가 넘긴 401/403 을 받을 `@ExceptionHandler`
+  - **없으면 막힌 경로가 401 이 아니라 200 빈 본문으로 나감.** 가이드 함정 표 참조
+- [ ] `spring-boot-starter-actuator` 추가 — health 경로는 허용 목록에 미리 들어 있음
 
 ### 1.2 패키지 구조
 
-ADR-0001 에 따라 발급과 검증을 분리합니다.
-
-- [ ] `auth/issue/` — 자격 증명 검증 후 토큰 발급 (나중에 분리 가능한 유일한 부분)
-- [ ] `auth/verify/` — 서명 검증 및 `SecurityContext` 주입 (각 인스턴스 내장)
+- [~] `ieum-auth` / `auth/issue/` — 설정·키·JWKS·SecurityConfig 까지 완료. 발급기·계정·토큰 수명 주기 남음
+- [ ] `ieum-api` / `auth/verify/` — 미착수 (가이드 4절)
 
 ### 1.3 계정
 
@@ -54,8 +65,8 @@ ADR-0001 에 따라 발급과 검증을 분리합니다.
   - [ ] BUSINESS_OWNER 는 `BusinessRegistration` 검증 절차 필요 여부 결정
 - [ ] 로그인 API — Access Token + Refresh Token 발급
 - [ ] `UserType` → Spring Security 권한(`ROLE_*`) 매핑
-- [ ] `UsersAccount.uid` 를 토큰 subject 로 사용할지, `id` 를 쓸지 결정
-  - `uid` 는 36자 UUID 이므로 내부 PK 노출을 피할 수 있음
+- [x] 토큰 subject 는 `UsersAccount.uid` (내부 PK 비노출)
+- [x] `UsersAccountRepository` 가 `Users` 타입으로 잘못 선언되어 있던 것을 수정, 조회 메서드 추가
 
 ### 1.4 토큰 수명 주기
 

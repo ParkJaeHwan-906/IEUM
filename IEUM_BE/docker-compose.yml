@@ -31,6 +31,8 @@ services:
     restart: unless-stopped
     environment:
       TZ: Asia/Seoul
+      # healthcheck 의 $$REDIS_PASSWORD 가 이 값을 읽는다
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
     command:
       - redis-server
       - --requirepass
