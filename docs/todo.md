@@ -9,7 +9,7 @@ IEUM 백엔드 작업 목록. 완료된 항목은 체크하고, 배경 설명이
 - [x] 도메인 엔티티 및 리포지토리 정의
 - [x] 로컬 개발 환경 (Docker Compose - MySQL 8.4, Redis 7.4)
 - [x] 환경변수 외부화 (`.env` + `application.yaml` 플레이스홀더)
-- [~] **인증/인가** ← 현재 단계 (모듈 분리·서명 키·JWKS 완료, 발급 API·API 서버 검증 진행 중)
+- [~] **인증/인가** ← 현재 단계 (모듈 분리·서명 키·JWKS·예외 처리·토큰 발급기·Refresh 저장소·가입 서비스 완료, 로그인 서비스·컨트롤러·API 서버 검증 진행 중)
 - [ ] 예약 도메인 로직
 - [ ] 부하 테스트 및 관측
 - [ ] V2 - Kafka 예약 대기열
@@ -47,32 +47,36 @@ ieum-api/      API 서버  — com.hwannee.ieum.auth.verify
   - 키가 없으면 임시 키 생성 + WARN. 재시작 시 토큰 무효
   - [ ] `scripts/gen-jwt-key.sh` 작성 (가이드 3.2)
 - [x] JWKS 공개 — `GET /.well-known/jwks.json`, 공개키만 노출 확인
-- [ ] `AuthExceptionAdvice` — `ProblemDetailAuthHandlers` 가 넘긴 401/403 을 받을 `@ExceptionHandler`
-  - **없으면 막힌 경로가 401 이 아니라 200 빈 본문으로 나감.** 가이드 함정 표 참조
+- [x] `AuthExceptionAdvice` — `ProblemDetailAuthHandlers` 가 넘긴 401/403 과 `AuthException`·unique 경합(409) 을 `ProblemDetail` 로 변환
+  - `@RestControllerAdvice` 여야 함. `@RestController` 로 두면 막힌 경로가 401 이 아니라 200 빈 본문으로 나감 (실제로 겪음)
+  - `AuthenticationException` / `AccessDeniedException` / `RSAKey` 는 이름이 같은 JDK 클래스가 있어 자동 import 확인 필요
 - [ ] `spring-boot-starter-actuator` 추가 — health 경로는 허용 목록에 미리 들어 있음
 
 ### 1.2 패키지 구조
 
-- [~] `ieum-auth` / `auth/issue/` — 설정·키·JWKS·SecurityConfig 까지 완료. 발급기·계정·토큰 수명 주기 남음
+- [~] `ieum-auth` / `auth/issue/` — `config`·`jwt`(`JwkSetController`, `AccessTokenIssuer`)·`token`(`RefreshTokenStore`)·`exception`·`web`(Advice, DTO) 완료. `AuthService`·`AuthController` 남음
+  - [ ] `SignupService` 가 `com.hwannee.ieum.service` 에 있음 → `auth/issue/service/` 로 이동
 - [ ] `ieum-api` / `auth/verify/` — 미착수 (가이드 4절)
 
 ### 1.3 계정
 
-- [ ] 회원가입 API
-  - [ ] **`UsersAccount.password` 가 평문 컬럼입니다.** `BCryptPasswordEncoder` 적용 필요
-  - [ ] 컬럼 길이 확인 — BCrypt 해시는 60자, 현재 `length = 100` 이므로 충분
+- [~] 회원가입 API — `SignupService` 완료 (ADMIN 거부 → 이메일/전화/닉네임 중복 검사 → `Users`·`UsersAccount` 저장). `AuthController` 남음
+  - [x] `UsersAccount.password` 는 `SignupService` 에서 `BCryptPasswordEncoder` 로 인코딩해 저장
+  - [x] 컬럼 길이 확인 — BCrypt 해시는 60자, 현재 `length = 100` 이므로 충분
+  - [x] 요청 DTO 검증 길이를 컬럼에 맞춤 (`name` 10, `tel` 11, `email` 100, `nickname` 20, `password` 8~72)
   - [ ] `UserType` 별 가입 분기 (CONSUMER / BUSINESS_OWNER)
   - [ ] BUSINESS_OWNER 는 `BusinessRegistration` 검증 절차 필요 여부 결정
-- [ ] 로그인 API — Access Token + Refresh Token 발급
+- [~] 로그인 API — `AccessTokenIssuer` 완료 (`kid` 헤더, `sub`=uid, `role`·`nickname` 클레임). `AuthService.login` 남음
+  - 계정이 없어도 BCrypt 비교를 한 번 수행해 응답 시간 차이를 없앨 것 (가이드 3.6)
 - [ ] `UserType` → Spring Security 권한(`ROLE_*`) 매핑
 - [x] 토큰 subject 는 `UsersAccount.uid` (내부 PK 비노출)
 - [x] `UsersAccountRepository` 가 `Users` 타입으로 잘못 선언되어 있던 것을 수정, 조회 메서드 추가
 
 ### 1.4 토큰 수명 주기
 
-- [ ] Refresh Token 저장소 — Redis (이미 인프라에 있음)
-- [ ] 토큰 재발급 API
-- [ ] 로그아웃 — Refresh Token 폐기
+- [x] Refresh Token 저장소 — `RefreshTokenStore`. Redis 에 SHA-256 해시 키로 저장, `getAndDelete`(GETDEL) 로 한 번만 소비
+- [ ] 토큰 재발급 API — `AuthService.refresh` (consume → uid 로 계정 재조회 → 새 쌍 발급)
+- [ ] 로그아웃 — `AuthService.logout` (`RefreshTokenStore.revoke`, 유효 여부와 무관하게 204)
 - [ ] Access Token 블랙리스트 필요 여부 결정
   - stateless JWT 는 만료 전 강제 무효화가 불가능. 수명을 짧게(15분 내외) 가져가는 것으로 대체 가능한지 검토
 
@@ -92,7 +96,7 @@ ieum-api/      API 서버  — com.hwannee.ieum.auth.verify
 
 ### 1.6 예외 처리
 
-- [ ] 401 / 403 을 `ProblemDetail` 로 응답
+- [~] 401 / 403 을 `ProblemDetail` 로 응답 — 인증 서버는 `AuthExceptionAdvice` 로 완료, API 서버는 가이드 4.3 `SecurityExceptionAdvice` 남음
   - `spring.mvc.problemdetails.enabled: true` 는 이미 켜져 있음
   - 단, `AuthenticationEntryPoint` / `AccessDeniedHandler` 는 필터 계층이라 별도 처리 필요
 - [ ] 인증 실패 사유를 응답에 과도하게 노출하지 않기 (계정 존재 여부 등)
