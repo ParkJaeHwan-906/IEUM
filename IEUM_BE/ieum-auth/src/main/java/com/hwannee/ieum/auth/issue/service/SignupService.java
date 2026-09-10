@@ -1,4 +1,4 @@
-package com.hwannee.ieum.service;
+package com.hwannee.ieum.auth.issue.service;
 
 import com.hwannee.ieum.auth.issue.exception.AuthException;
 import com.hwannee.ieum.auth.issue.web.dto.SignupRequest;
