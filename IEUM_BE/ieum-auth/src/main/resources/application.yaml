@@ -11,7 +11,6 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       pool-name: IeumAuthHikariPool
-      # 로그인/가입 트래픽만 받으므로 API 서버보다 작게 잡는다
       maximum-pool-size: ${AUTH_DB_POOL_SIZE:5}
       minimum-idle: 2
       connection-timeout: 3000
@@ -49,10 +48,10 @@ server:
 
 ieum:
   auth:
-    # 토큰의 iss 클레임. API 서버의 issuer-uri 와 같아야 한다
     issuer: ${JWT_ISSUER:http://localhost:8081}
-    # Base64 PKCS#8 DER. 비우면 기동 시 임시 키를 만든다 (scripts/gen-jwt-key.sh)
     private-key: ${JWT_PRIVATE_KEY:}
+    # 교체 전 키(Base64 PKCS#8). 쉼표로 여러 개. 공개 부분만 JWKS 에 실리며 access-token-ttl 이 지나면 비운다
+    previous-keys: ${JWT_PREVIOUS_KEYS:}
     access-token-ttl: ${ACCESS_TOKEN_TTL:PT15M}
     refresh-token-ttl: ${REFRESH_TOKEN_TTL:P14D}
   cors:
