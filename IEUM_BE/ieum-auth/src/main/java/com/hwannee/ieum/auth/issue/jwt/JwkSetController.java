@@ -1,7 +1,6 @@
 package com.hwannee.ieum.auth.issue.jwt;
 
 import com.nimbusds.jose.jwk.JWKSet;
-import com.nimbusds.jose.jwk.RSAKey;
 import org.springframework.http.CacheControl;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -16,8 +15,8 @@ public class JwkSetController {
 
     private final Map<String, Object> publicJwks;
 
-    public JwkSetController(RSAKey signingKey) {
-        this.publicJwks = new JWKSet(signingKey).toJSONObject(true);   // true = 공개키만
+    public JwkSetController(JWKSet publicJwkSet) {
+        this.publicJwks = publicJwkSet.toJSONObject(true);
     }
 
     @GetMapping(value = "/.well-known/jwks.json", produces = MediaType.APPLICATION_JSON_VALUE)
