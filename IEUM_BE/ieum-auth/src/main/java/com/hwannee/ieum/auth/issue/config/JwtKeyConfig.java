@@ -1,6 +1,7 @@
 package com.hwannee.ieum.auth.issue.config;
 
 import com.nimbusds.jose.JWSAlgorithm;
+import com.nimbusds.jose.jwk.JWK;
 import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.RSAKey;
@@ -23,7 +24,9 @@ import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.RSAPublicKeySpec;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 
 @Configuration
 @EnableConfigurationProperties(AuthProperties.class)
@@ -35,17 +38,43 @@ public class JwtKeyConfig {
     public RSAKey signingKey(AuthProperties properties) throws Exception {
         KeyPair keyPair = StringUtils.hasText(properties.privateKey())
                 ? loadFromPkcs8(properties.privateKey()) : generateEphemeral();
+        return toRsaKey(keyPair);
+    }
+
+    @Bean
+    public JWKSet publicJwkSet(RSAKey signingKey, AuthProperties properties) throws Exception {
+        List<JWK> keys = new ArrayList<>();
+        keys.add(signingKey.toPublicJWK());
+        for (String previous : properties.previousKeys()) {
+            if (!StringUtils.hasText(previous)) {
+                continue;
+            }
+            RSAKey previousKey = toRsaKey(loadFromPkcs8(previous)).toPublicJWK();
+            if (previousKey.getKeyID().equals(signingKey.getKeyID())) {
+                log.warn("ieum.auth.previous-keys 에 현재 서명 키와 같은 키가 있어 건너뜁니다 (kid={})", previousKey.getKeyID());
+                continue;
+            }
+            keys.add(previousKey);
+        }
+        if (keys.size() > 1) {
+            log.info("JWKS 에 교체 전 키 {}개를 함께 공개합니다. access-token-ttl({}) 이 지나면 previous-keys 에서 제거하세요.",
+                    keys.size() - 1, properties.accessTokenTtl());
+        }
+        return new JWKSet(keys);
+    }
+
+    @Bean
+    public JwtEncoder jwtEncoder(RSAKey signingKey) {
+        return new NimbusJwtEncoder(new ImmutableJWKSet<SecurityContext>(new JWKSet(signingKey)));
+    }
+
+    private static RSAKey toRsaKey(KeyPair keyPair) throws Exception {
         return new RSAKey.Builder((RSAPublicKey) keyPair.getPublic())
                 .privateKey((RSAPrivateKey) keyPair.getPrivate())
                 .keyIDFromThumbprint()
                 .algorithm(JWSAlgorithm.RS256)
                 .keyUse(KeyUse.SIGNATURE)
                 .build();
-    }
-
-    @Bean
-    public JwtEncoder jwtEncoder(RSAKey signingKey) {
-        return new NimbusJwtEncoder(new ImmutableJWKSet<SecurityContext>(new JWKSet(signingKey)));
     }
 
     static KeyPair loadFromPkcs8(String base64Der) throws Exception {
