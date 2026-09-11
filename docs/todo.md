@@ -153,7 +153,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
     - `lastOrderTime` 과는 무관. `PENDING` 과 `APPROVED` 에는 만료가 없고 점주의 승인·취소로만 빠져나간다
     - [ ] 미승인 `PENDING` 이 방치되면 재고가 잠긴 채 남는다 — 점주 미응답 시 자동 취소를 둘지, 운영 알림으로 갈지 결정 필요
   - 재고 흐름: 예약 생성(`PENDING`) 시 차감 → `PICKED_UP` 이면 소진 확정 → `CANCELED`·`EXPIRED` 이면 복구. 복구는 주문당 정확히 1회
-  - [ ] README 의 상태 표를 코드에 맞게 수정 (`EXPIRED` 포함 6개 상태)
+  - [x] README 의 상태 표를 코드에 맞게 수정 (`EXPIRED` 포함 6개 상태, 불변식의 필드명도 `initialQuantity`/`remainingQuantity` 로)
 - [x] 재고 필드 — `StoresItems.initialQuantity` / `remainingQuantity` (`initial_quantity` / `remaining_quantity`). `decreaseQuantity` / `increaseQuantity` 에 하한·상한 검사 있음
 - [x] 동시성 제어 방식 — 포트폴리오 목적으로 **세 단계를 모두 구현하고 같은 시나리오(재고 100 / 요청 10,000)로 비교 측정**한다
   1. 잠금 없음 — `remainingQuantity` 조회 후 차감. 초과 예약이 실제로 발생하는 것을 먼저 보인다
@@ -167,7 +167,23 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 
 ### 2.2 구현
 
-- [ ] Service / Controller 계층 (현재 엔티티와 리포지토리만 존재)
+- [~] Service / Controller 계층 — 뼈대 생성 (2026-09-12). `ieum-api` / `orders/` 아래 `config`·`stock`·`exception`·`service`·`web`
+  - `StockDeductionStrategy` 인터페이스 + `Naive`/`OptimisticLock`/`Redis` 구현체. `STOCK_STRATEGY` 로 하나만 빈 등록
+  - `OrderService` — create(멱등키·중복 예약은 TODO), findMine, cancel(소비자, uid 조건 조회로 타인 주문은 404), approve/readyForPickup/pickUp(점주, 서비스 계층 소유권 검사)
+  - `OrderController`(`/api/orders`, CONSUMER) / `OwnerOrderController`(`/api/owner/orders`, BUSINESS_OWNER 클래스 레벨 `@PreAuthorize`)
+  - 도메인: `OrderState.EXPIRED`·`ACTIVE` 집합, `UsersOrders.readyAt`·전이 가드·`expire()`, `InvalidOrderStateException`, 리포지토리 조회 메서드
+  - 남은 TODO 는 코드의 `// TODO(...)` 주석에 있음. 라벨은 이 문서의 절 번호와 맞춤
+  - [ ] 1단계 k6 시나리오로 초과 예약 재현 후 결과 기록
+  - [ ] 2단계 재시도 계층 (트랜잭션 바깥, 새 트랜잭션)
+- [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
+  - 점주: `POST /api/owner/stores`, `GET /api/owner/stores/me`, `POST /api/owner/stores/{storeUid}/items` (`OwnerStoreController`, BUSINESS_OWNER)
+  - 공개: `GET /api/stores/{storeUid}`, `GET /api/stores/{storeUid}/items`, `GET /api/items/{itemUid}` (permitAll 경로)
+  - 공통 예외 부모 `common/exception/ApiException` + `common/web/ApiExceptionAdvice`. `OrderException`·`StoreException` 이 상속
+  - `Stores.changeLogoImgUrl` 추가, `StoresRepository`·`StoresItemsRepository` 조회 메서드 추가
+  - 남은 것(TODO 주석): 영업 종료, 영업 시간 수정, 재고 조정, 판매 종료, 상품별 예약 현황, 지역별 조회(위치 컬럼 설계 선행)
+- [x] 부하 테스트 SQL 시드 — `IEUM_BE/scripts/sql/seed-loadtest.sql` (점주 1·가게 1·재고 100 상품 1·소비자 N, 기본 1,000), `reset-loadtest.sql` (라운드 간 재고·주문 초기화)
+  - 고정 uid: 점주 `1111…`, 가게 `2222…`, 상품 `3333…`. 비밀번호는 전부 `password1`
+  - 재실행 가능. 테이블은 서버를 한 번 기동해 Hibernate 가 만든 뒤여야 함
 - [ ] Redis Lua Script 기반 원자적 재고 차감
 - [ ] Idempotency-Key 처리 (24시간 보존)
 - [ ] 동일 사용자 + 동일 상품 중복 활성 예약 방지
