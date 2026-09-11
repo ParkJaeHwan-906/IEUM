@@ -67,6 +67,12 @@ server:
 ieum:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  stock:
+    # 재고 차감 전략: naive | optimistic | redis (TODO 2.1 의 3단계 비교)
+    strategy: ${STOCK_STRATEGY:naive}
+  order:
+    # READY_FOR_PICKUP 진입 후 이 시간이 지나면 EXPIRED, 재고 복구
+    pickup-ttl: ${PICKUP_TTL:PT15M}
 
 logging:
   level:
