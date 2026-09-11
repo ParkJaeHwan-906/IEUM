@@ -9,7 +9,7 @@ IEUM 백엔드 작업 목록. 완료된 항목은 체크하고, 배경 설명이
 - [x] 도메인 엔티티 및 리포지토리 정의
 - [x] 로컬 개발 환경 (Docker Compose - MySQL 8.4, Redis 7.4)
 - [x] 환경변수 외부화 (`.env` + `application.yaml` 플레이스홀더)
-- [~] **인증/인가** ← 현재 단계 (인증 서버·API 서버 코드 완료, 테스트·통합 확인·ADR-0002 진행 중)
+- [~] **인증/인가** ← 현재 단계 (인증 서버·API 서버 코드·단위 테스트 완료. 남은 것: 두 서버 기동 후 통합 확인, ADR-0002)
 - [ ] 예약 도메인 로직
 - [ ] 부하 테스트 및 관측
 - [ ] V2 - Kafka 예약 대기열
@@ -122,10 +122,23 @@ ieum-api/      API 서버  — com.hwannee.ieum.auth.verify
 
 ### 1.7 테스트
 
-- [ ] `spring-security-test` 로 인가 규칙 검증
-- [ ] 토큰 없이 보호된 엔드포인트 호출 시 401
-- [ ] 권한 없는 역할로 호출 시 403
-- [ ] 타인의 리소스 접근 시 403
+Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `contextLoads` 는 MySQL·Redis 가 필요하므로
+패키지 필터로 제외해 실행한다: `./gradlew :ieum-auth:test :ieum-api:test --tests "com.hwannee.ieum.auth.*"`
+
+- [x] `ieum-auth` / `JwtKeyConfigTest` — PKCS#8 로드·임시 키 fallback·JWKS 에 개인키 성분 없음·중복 previous-key 건너뛰기
+- [x] `ieum-auth` / `AccessTokenIssuerTest` — 발급 → 공개키 검증 왕복, 다른 키 `BadJwtException`, 다른 issuer `JwtValidationException`
+- [x] `ieum-auth` / `AuthControllerTest` — `@WebMvcTest`, 서비스 `@MockitoBean`. JWKS 공개 범위·로그인 성공/실패·검증 400·회원가입 201/409/400·refresh 401·logout 204·나머지 경로 401
+- [x] `ieum-api` / `SecurityConfigTest` — `@WebMvcTest` + `JwtDecoder` 모킹, 테스트 소스의 `ProbeController` 로 검증
+  - [x] 토큰 없이 보호된 엔드포인트 호출 시 401 (`WWW-Authenticate: Bearer`, `application/problem+json`)
+  - [x] 없는 경로도 401 (default-deny)
+  - [x] 잘못된 토큰 401, 사유 미노출
+  - [x] 유효 토큰 → `@CurrentUser` 주입
+  - [x] 권한 없는 역할로 호출 시 403 / 역할 일치 200
+  - [x] permitAll 경로에서 `@CurrentUser` 사용 시 401
+  - 잘못된 토큰 모킹은 `BadJwtException` 이어야 함. `JwtException` 은 `AuthenticationServiceException` 으로 감싸져 경로가 다름
+  - `@WebMvcTest` 는 `@Configuration`·`@Component` 를 스캔하지 않으므로 `SecurityConfig`·`ProblemDetailAuthHandlers` 는 `@Import` 필수
+  - Spring Boot 4: `@WebMvcTest` 는 `org.springframework.boot.webmvc.test.autoconfigure`, `@MockitoBean` 은 `org.springframework.test.context.bean.override.mockito`
+- [ ] 타인의 리소스 접근 시 403 — 소유권 검사(1.5) 구현 후
 
 ---
 
