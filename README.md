@@ -65,17 +65,17 @@ IEUM(이음)은 동네 시장과 음식점이 영업 종료 전에 남은 신선
 재고 조정이 없는 한 상품별 수량은 항상 다음 관계를 만족해야 합니다.
 
 ~~~text
-initialStock = availableStock
-             + sum(RESERVED.quantity)
-             + sum(COMPLETED.quantity)
+initialQuantity = remainingQuantity
+                + sum(quantity where state in PENDING, APPROVED, READY_FOR_PICKUP)
+                + sum(quantity where state = PICKED_UP)
 ~~~
 
 추가로 다음 불변식을 보장합니다.
 
 ~~~text
-availableStock >= 0
+remainingQuantity >= 0
 
-reservedQuantity + completedQuantity <= initialStock
+activeQuantity + pickedUpQuantity <= initialQuantity
 
 count(reservation by userId + idempotencyKey) <= 1
 
@@ -122,7 +122,7 @@ API 요청 안에서 Redis Lua Script를 실행해 예약 성공 여부를 즉�
 
 Redis Keyspace Notification은 정확한 실행 시각과 이벤트 전달을 보장하는 스케줄러가 아니므로, 예약 만료를 TTL 이벤트에만 의존하지 않습니다.
 
-- Reservation TTL
+- 픽업 대기 TTL — `READY_FOR_PICKUP` 진입 후 15분(`PICKUP_TTL`)
 - 만료 예정 시간을 저장하는 Redis Sorted Set
 - 만료 상태 전이와 재고 복구를 수행하는 Expiry Worker
 - 지연·누락된 만료를 탐지하는 Reconciliation Job
@@ -159,18 +159,35 @@ Kafka를 예약 요청 대기열로 사용해 순간적으로 몰린 트래픽�
 
 ## Reservation Status
 
+점주 승인 절차를 유지합니다. 예약은 생성 시점에 재고를 차감하고, 점주가 승인·준비 완료·픽업 완료로 상태를 진행시킵니다.
+
 ~~~mermaid
 stateDiagram-v2
-    [*] --> RESERVED: 예약 성공 및 재고 차감
-    RESERVED --> COMPLETED: 픽업 완료
-    RESERVED --> CANCELLED: 사용자 취소 및 재고 복구
-    RESERVED --> EXPIRED: 예약 만료 및 재고 복구
-    COMPLETED --> [*]
-    CANCELLED --> [*]
+    [*] --> PENDING: 예약 성공 및 재고 차감
+    PENDING --> APPROVED: 점주 승인
+    APPROVED --> READY_FOR_PICKUP: 준비 완료 (readyAt 기록)
+    READY_FOR_PICKUP --> PICKED_UP: 픽업 완료
+    PENDING --> CANCELED: 취소 및 재고 복구
+    APPROVED --> CANCELED: 취소 및 재고 복구
+    READY_FOR_PICKUP --> CANCELED: 취소 및 재고 복구
+    READY_FOR_PICKUP --> EXPIRED: readyAt + 15분 미픽업, 재고 복구
+    PICKED_UP --> [*]
+    CANCELED --> [*]
     EXPIRED --> [*]
 ~~~
 
-COMPLETED, CANCELLED, EXPIRED는 최종 상태입니다. 같은 명령이 반복되더라도 상태와 재고를 추가로 변경하지 않습니다.
+| 상태 | 의미 | 재고 |
+|---|---|---|
+| PENDING | 예약 접수, 점주 승인 대기 | 차감됨 |
+| APPROVED | 점주 승인 | 차감됨 |
+| READY_FOR_PICKUP | 준비 완료, 픽업 대기. 이 시점부터 15분 카운트 | 차감됨 |
+| PICKED_UP | 픽업 완료 | 소진 확정 |
+| CANCELED | 사용자 또는 점주 취소 | 복구 |
+| EXPIRED | 준비 완료 후 15분 내 미픽업 (노쇼) | 복구 |
+
+PICKED_UP, CANCELED, EXPIRED는 최종 상태입니다. 같은 명령이 반복되더라도 상태와 재고를 추가로 변경하지 않으며, 재고 복구는 예약당 정확히 한 번만 일어납니다.
+
+EXPIRED는 노쇼를 막고 재고 회전을 빠르게 하기 위한 제약입니다. 만료 시각은 점주가 준비 완료 처리한 시점을 기준으로 하며, 상품의 `lastOrderTime`과는 무관합니다. PENDING과 APPROVED에는 자동 만료가 없습니다.
 
 ## Idempotency Policy
 
