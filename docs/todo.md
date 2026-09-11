@@ -9,8 +9,8 @@ IEUM 백엔드 작업 목록. 완료된 항목은 체크하고, 배경 설명이
 - [x] 도메인 엔티티 및 리포지토리 정의
 - [x] 로컬 개발 환경 (Docker Compose - MySQL 8.4, Redis 7.4)
 - [x] 환경변수 외부화 (`.env` + `application.yaml` 플레이스홀더)
-- [~] **인증/인가** ← 현재 단계 (인증 서버·API 서버 코드·단위 테스트 완료. 남은 것: 두 서버 기동 후 통합 확인, ADR-0002)
-- [ ] 예약 도메인 로직
+- [x] 인증/인가 — 인증 서버 분리, 단위 테스트, Postman 통합 확인, ADR-0002 (2026-09-12 완료)
+- [~] **예약 도메인 로직** ← 현재 단계 (선결 과제 결정 완료, 구현 착수 전)
 - [ ] 부하 테스트 및 관측
 - [ ] V2 - Kafka 예약 대기열
 - [ ] V3 - Kubernetes Scale-out
@@ -31,7 +31,8 @@ ieum-auth/     인증 서버 — com.hwannee.ieum.auth.issue
 ieum-api/      API 서버  — com.hwannee.ieum.auth.verify
 ~~~
 
-- [ ] ADR-0002 작성 — ADR-0001 의 "프로세스는 나누지 않는다"를 수정하는 기록
+- [x] [ADR-0002](./adr/0002-auth-server-split.md) 작성 — ADR-0001 의 "프로세스는 나누지 않는다"를 대체하는 기록
+- [x] 두 서버 기동 후 Postman 으로 signup → login → API 호출 → refresh → logout 확인 (2026-09-12)
 
 ### 1.1 기반
 
@@ -146,14 +147,23 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 
 ### 2.1 선결 과제
 
-- [ ] **`OrderState` 와 README 의 예약 상태가 불일치합니다.** 정리 필요
-  - 코드: `PENDING`, `APPROVED`, `READY_FOR_PICKUP`, `PICKED_UP`, `CANCELED`
-  - README: `RESERVED`, `COMPLETED`, `CANCELLED`, `EXPIRED`
-  - 특히 README 의 핵심인 **`EXPIRED`(TTL 만료) 상태가 코드에 없습니다.** 만료 시 재고 복구 로직이 여기에 걸립니다
-  - 점주 승인 절차(`APPROVED`)를 유지할지, README 대로 즉시 확정 모델로 갈지 결정
-- [ ] 재고 필드 설계 — `StoresItems` 에 `initialStock` / `availableStock` 확인
-- [ ] `UsersOrders.@Version` 낙관적 락과 Redis 기반 재고 차감의 역할 분담 정리
-  - 재고는 Redis, 상태 전이는 JPA 로 나눌 것인지
+- [x] 예약 상태 모델 — **점주 승인 절차를 유지한다** (2026-09-12 결정). 코드의 `OrderState` 가 기준이고 README 를 코드에 맞춘다
+  - 코드: `PENDING → APPROVED → READY_FOR_PICKUP → PICKED_UP`, 어디서든 `CANCELED`
+  - [x] `EXPIRED` 위치 — **`READY_FOR_PICKUP` 진입 후 15분 미픽업** (2026-09-12 결정). 노쇼 방지와 빠른 회전이 목적이며 만료 시 재고를 복구한다
+    - `lastOrderTime` 과는 무관. `PENDING` 과 `APPROVED` 에는 만료가 없고 점주의 승인·취소로만 빠져나간다
+    - [ ] 미승인 `PENDING` 이 방치되면 재고가 잠긴 채 남는다 — 점주 미응답 시 자동 취소를 둘지, 운영 알림으로 갈지 결정 필요
+  - 재고 흐름: 예약 생성(`PENDING`) 시 차감 → `PICKED_UP` 이면 소진 확정 → `CANCELED`·`EXPIRED` 이면 복구. 복구는 주문당 정확히 1회
+  - [ ] README 의 상태 표를 코드에 맞게 수정 (`EXPIRED` 포함 6개 상태)
+- [x] 재고 필드 — `StoresItems.initialQuantity` / `remainingQuantity` (`initial_quantity` / `remaining_quantity`). `decreaseQuantity` / `increaseQuantity` 에 하한·상한 검사 있음
+- [x] 동시성 제어 방식 — 포트폴리오 목적으로 **세 단계를 모두 구현하고 같은 시나리오(재고 100 / 요청 10,000)로 비교 측정**한다
+  1. 잠금 없음 — `remainingQuantity` 조회 후 차감. 초과 예약이 실제로 발생하는 것을 먼저 보인다
+  2. `@Version` 낙관적 락 — `StoresItems.version` 충돌 시 `OptimisticLockException`. 재시도 정책과 함께. 정합성은 맞지만 실패율·재시도 폭주·DB 병목을 측정한다
+  3. Redis — Lua Script 로 원자적 차감 (README 설계). Redis 를 재고 원장으로 쓰고 DB 는 결과를 기록
+     - 분산락(SETNX/Redisson)은 채택하지 않음. 락 TTL·커밋 전 해제 문제가 있고 여전히 직렬화라 처리량 상한이 락 보유 시간에 묶임. 문서에 절충안으로만 한 줄 언급
+     - 문제가 "동시성"에서 "Redis↔DB 정합성"으로 옮겨 감 → 2.2 의 재고 복구 멱등성·Expiry Worker·Reconciliation 이 그 답
+  - (선택) 2 와 3 사이에 조건부 UPDATE 한 문장(`SET remaining = remaining - ? WHERE id = ? AND remaining >= ?`) 을 중간 데이터 포인트로 추가. `@Version` 없이도 정합성이 맞고 재시도가 없어, 낙관적 락의 비용이 어디서 오는지 분리해 보여 줌
+  - 측정 항목: 최종 `remainingQuantity`, 성공 건수(정확히 100 이어야 함), p99 지연, DB 커넥션 대기, 재시도 횟수
+  - 각 단계는 프로파일 또는 전략 인터페이스로 갈아 끼울 수 있게 두고 결과를 ADR-0003 에 남긴다
 
 ### 2.2 구현
 
@@ -161,8 +171,10 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 - [ ] Redis Lua Script 기반 원자적 재고 차감
 - [ ] Idempotency-Key 처리 (24시간 보존)
 - [ ] 동일 사용자 + 동일 상품 중복 활성 예약 방지
-- [ ] TTL 기반 예약 만료
-- [ ] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음)
+- [ ] `OrderState.EXPIRED` 추가, `UsersOrders.expire()` 전이 — `READY_FOR_PICKUP` 에서만 허용, 그 외 상태면 무시
+- [ ] `UsersOrders` 에 `ready_at`(또는 `expires_at`) 컬럼 추가 — `readyForPickup()` 호출 시 기록. 만료 판정 기준
+- [ ] TTL 기반 예약 만료 — `ready_at + 15분`. 시간은 설정값(`PICKUP_TTL`, 기본 `PT15M`)
+- [ ] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음) — `readyForPickup()` 시 `ZADD` (score = 만료 시각), 워커가 `ZRANGEBYSCORE` 로 지난 것을 꺼내 `expire()` + 재고 복구
 - [ ] 재고 복구 멱등성 (예약당 1회)
 - [ ] Reconciliation Job — 지연·누락 만료 탐지
 - [ ] 픽업 코드 발급 및 검증
