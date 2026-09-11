@@ -56,6 +56,10 @@ public class Stores extends BaseTimeEntity {
         this.closeAt = closeAt;
     }
 
+    public void changeLogoImgUrl(String logoImgUrl) {
+        this.logoImgUrl = logoImgUrl;
+    }
+
     public void shutdown() {
         this.shutdownAt = LocalDateTime.now();
     }
