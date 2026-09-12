@@ -1,5 +1,7 @@
 -- 부하 테스트 한 라운드가 끝난 뒤 다음 라운드를 위해 상품 재고와 주문만 되돌린다. 사용자·가게·상품은 유지.
--- 실행:  mysql -h 127.0.0.1 -P 3306 -u <MYSQL_USER> -p <MYSQL_DATABASE> < scripts/sql/reset-loadtest.sql
+-- 실행 (IEUM_BE 에서, seed-loadtest.sql 과 같은 방식):
+--   PowerShell: Get-Content -Raw -Encoding utf8 scripts/sql/reset-loadtest.sql | docker exec -i ieum-mysql mysql --default-character-set=utf8mb4 -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE>
+--   Git Bash:   docker exec -i ieum-mysql mysql --default-character-set=utf8mb4 -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE> < scripts/sql/reset-loadtest.sql
 --
 -- 실행 전에 이번 라운드의 결과를 먼저 기록한다:
 --   SELECT order_state, COUNT(*), SUM(quantity) FROM users_orders o JOIN stores_items i ON i.id = o.store_item_id
