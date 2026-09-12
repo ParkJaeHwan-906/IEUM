@@ -169,7 +169,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 
 - [~] Service / Controller 계층 — 뼈대 생성 (2026-09-12). `ieum-api` / `orders/` 아래 `config`·`stock`·`exception`·`service`·`web`
   - `StockDeductionStrategy` 인터페이스 + `Naive`/`OptimisticLock`/`Redis` 구현체. `STOCK_STRATEGY` 로 하나만 빈 등록
-  - `OrderService` — create(멱등키·중복 예약은 TODO), findMine, cancel(소비자, uid 조건 조회로 타인 주문은 404), approve/readyForPickup/pickUp(점주, 서비스 계층 소유권 검사)
+  - `OrderService` — create(판매 조건·중복 활성 예약 검사 포함, 멱등키는 TODO), findMine, cancel(소비자, uid 조건 조회로 타인 주문은 404), approve/readyForPickup/pickUp(점주, 서비스 계층 소유권 검사)
   - `OrderController`(`/api/orders`, CONSUMER) / `OwnerOrderController`(`/api/owner/orders`, BUSINESS_OWNER 클래스 레벨 `@PreAuthorize`)
   - 도메인: `OrderState.EXPIRED`·`ACTIVE` 집합, `UsersOrders.readyAt`·전이 가드·`expire()`, `InvalidOrderStateException`, 리포지토리 조회 메서드
   - 남은 TODO 는 코드의 `// TODO(...)` 주석에 있음. 라벨은 이 문서의 절 번호와 맞춤
@@ -186,9 +186,10 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - 재실행 가능. 테이블은 서버를 한 번 기동해 Hibernate 가 만든 뒤여야 함
 - [ ] Redis Lua Script 기반 원자적 재고 차감
 - [ ] Idempotency-Key 처리 (24시간 보존)
-- [ ] 동일 사용자 + 동일 상품 중복 활성 예약 방지
-- [ ] `OrderState.EXPIRED` 추가, `UsersOrders.expire()` 전이 — `READY_FOR_PICKUP` 에서만 허용, 그 외 상태면 무시
-- [ ] `UsersOrders` 에 `ready_at`(또는 `expires_at`) 컬럼 추가 — `readyForPickup()` 호출 시 기록. 만료 판정 기준
+- [x] 예약 생성 전제 조건 (2026-09-12) — 영업 종료·`lastOrderTime` 경과 시 `ItemNotOnSale`, 동일 사용자 + 동일 상품 활성 예약이 있으면 `DuplicateActiveOrder`. 재고 차감 전에 검사. `OrderServiceTest` 로 검증
+  - DB 조회 기반이라 동시 요청 사이의 틈은 남아 있음. 3단계에서 중복 검사를 Lua 스크립트 안으로 옮겨 닫는다
+- [x] `OrderState.EXPIRED` 추가, `UsersOrders.expire()` 전이 — `READY_FOR_PICKUP` 에서만 허용. 그 외 상태에서 예외로 둘지 무시할지는 Expiry Worker 구현 시 결정
+- [x] `UsersOrders` 에 `ready_at` 컬럼 추가 — `readyForPickup()` 호출 시 기록. 만료 판정 기준
 - [ ] TTL 기반 예약 만료 — `ready_at + 15분`. 시간은 설정값(`PICKUP_TTL`, 기본 `PT15M`)
 - [ ] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음) — `readyForPickup()` 시 `ZADD` (score = 만료 시각), 워커가 `ZRANGEBYSCORE` 로 지난 것을 꺼내 `expire()` + 재고 복구
 - [ ] 재고 복구 멱등성 (예약당 1회)
