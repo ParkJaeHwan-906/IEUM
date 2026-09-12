@@ -176,7 +176,25 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - [x] 1단계 k6 시나리오로 초과 예약 재현 후 결과 기록 (2026-09-12) — 201 이 1,996건, 초과 예약 1,896건, 최종 remaining 0. 전문은 [performance/2026-09-12-stage1-naive.md](./performance/2026-09-12-stage1-naive.md)
     - SQL 로그(`debug`/`trace`)가 켜진 채 측정됨. 지연 비교용으로 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 한 번 더 돌려 기록에 덧붙인다
     - `Thread.sleep` 없이도 재현되므로 넣지 않는다
-  - [ ] 2단계 재시도 계층 (트랜잭션 바깥, 새 트랜잭션)
+  - [ ] **2단계 낙관적 락 + 재시도 계층** ← 다음 작업
+    - [ ] 0. 1단계를 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 performance 기록에 덧붙임 (지연 비교의 기준선)
+    - [ ] 1. 재시도 계층 — `OrderService.create` 를 감싸는 별도 빈 (`orders/service/OrderCreateRetrier` 또는 유사)
+      - 왜 별도 빈인가: `create` 가 `@Transactional` 이라 충돌은 커밋 시점에 프록시 밖으로 `ObjectOptimisticLockingFailureException` 으로 나온다. 같은 빈 안에서 catch 해 재호출하면 프록시를 거치지 않아 새 트랜잭션이 열리지 않는다
+      - 컨트롤러는 `OrderService` 가 아니라 이 빈을 호출. `naive`·`redis` 전략에서는 충돌이 없어 한 번에 통과하므로 전략과 무관하게 같은 경로를 탄다
+      - 수동 루프로 시작 (spring-retry 는 AOP 가 한 겹 더 생겨 계측이 흐려짐). 필요해지면 교체
+      - 재시도 대상은 `ObjectOptimisticLockingFailureException` 만. `InsufficientStock`·`DuplicateActiveOrder` 등 `ApiException` 은 확정된 답이므로 즉시 반환
+      - 재시도마다 새 트랜잭션이 재고를 다시 읽으므로, 그 사이 재고가 0 이 되면 `InsufficientStock` 으로 끝난다 (재고 없는데 재시도 반복하지 않음)
+      - 첫 시도가 롤백되면 주문도 저장되지 않으므로 재시도에서 `DuplicateActiveOrder` 오탐은 없다
+    - [ ] 2. 설정값 — `OrderProperties` 에 `retry.maxAttempts` (기본 3), `retry.backoff` (기본 `PT0.01S`, 지터 포함 여부 결정). `.env.example` 에 `STOCK_RETRY_MAX_ATTEMPTS`, `STOCK_RETRY_BACKOFF`
+    - [ ] 3. 최종 실패 응답 결정 — 현재 `ApiExceptionAdvice` 는 409 "요청이 몰려 처리하지 못했습니다". 503 + `Retry-After` 가 의미상 맞는지 검토. 재시도 계층 이후 이 핸들러에 도달하는 것은 소진된 요청뿐이어야 함
+    - [ ] 4. 계측 — `micrometer-registry-prometheus` 추가, `management.endpoints.web.exposure.include=health,prometheus`, `/actuator/prometheus` 접근 정책 결정 (permitAll 또는 별도 포트)
+      - 카운터 `order.create.attempts` (tag: `outcome` = success | conflict | exhausted), 히스토그램 또는 tag 로 "성공까지 걸린 시도 횟수"
+      - HikariCP 는 actuator 가 자동 노출 (`hikaricp.connections.pending`, `hikaricp.connections.acquire`). 측정 중 스크랩할 방법 결정 (Prometheus 컨테이너 vs 측정 직후 `curl` 로 스냅샷)
+    - [ ] 5. 테스트 — 재시도 빈 단위 테스트: 두 번 충돌 후 성공이면 3회 호출, 상한 초과면 예외 그대로 전파, `InsufficientStock` 은 재시도 없이 즉시 전파, 카운터 값 검증
+    - [ ] 6. 측정 — `STOCK_STRATEGY=optimistic` 으로 같은 k6 시나리오. 기록할 것: 201 이 정확히 100 인지, 최종 `remaining_quantity`, 소진(exhausted) 건수, 시도 횟수 분포, `hikaricp.connections.pending` 최대, p99, 처리량
+      - `performance/<날짜>-stage2-optimistic.md` 에 1단계와 같은 형식으로, ADR-0003 결과 표 2단계 행 갱신
+      - ADR-0003 에 "Version 으로 해결되는 것(초과 예약)과 남는 것(재고가 있는데 답을 못 주는 소진 실패, 실패 시도의 DB 비용, 재고 행 밖의 불변식, 처리량 상한)" 을 측정 수치와 함께 기록
+    - [ ] (선택) 7. 조건부 UPDATE 한 문장 — `StoresItemsRepository` 의 TODO(2.1 선택 단계). `@Version` 없이 재시도도 없는 중간 데이터 포인트. 시간이 허락하면 같은 형식으로 측정
 - [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
   - 점주: `POST /api/owner/stores`, `GET /api/owner/stores/me`, `POST /api/owner/stores/{storeUid}/items` (`OwnerStoreController`, BUSINESS_OWNER)
   - 공개: `GET /api/stores/{storeUid}`, `GET /api/stores/{storeUid}/items`, `GET /api/items/{itemUid}` (permitAll 경로)
