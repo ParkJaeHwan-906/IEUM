@@ -163,7 +163,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
      - 문제가 "동시성"에서 "Redis↔DB 정합성"으로 옮겨 감 → 2.2 의 재고 복구 멱등성·Expiry Worker·Reconciliation 이 그 답
   - (선택) 2 와 3 사이에 조건부 UPDATE 한 문장(`SET remaining = remaining - ? WHERE id = ? AND remaining >= ?`) 을 중간 데이터 포인트로 추가. `@Version` 없이도 정합성이 맞고 재시도가 없어, 낙관적 락의 비용이 어디서 오는지 분리해 보여 줌
   - 측정 항목: 최종 `remainingQuantity`, 성공 건수(정확히 100 이어야 함), p99 지연, DB 커넥션 대기, 재시도 횟수
-  - 각 단계는 프로파일 또는 전략 인터페이스로 갈아 끼울 수 있게 두고 결과를 ADR-0003 에 남긴다
+  - 각 단계는 프로파일 또는 전략 인터페이스로 갈아 끼울 수 있게 두고 결과를 [ADR-0003](./adr/0003-stock-deduction-concurrency.md) 에 남긴다 (2026-09-12 작성, 1단계까지 기록)
 
 ### 2.2 구현
 
@@ -173,7 +173,9 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - `OrderController`(`/api/orders`, CONSUMER) / `OwnerOrderController`(`/api/owner/orders`, BUSINESS_OWNER 클래스 레벨 `@PreAuthorize`)
   - 도메인: `OrderState.EXPIRED`·`ACTIVE` 집합, `UsersOrders.readyAt`·전이 가드·`expire()`, `InvalidOrderStateException`, 리포지토리 조회 메서드
   - 남은 TODO 는 코드의 `// TODO(...)` 주석에 있음. 라벨은 이 문서의 절 번호와 맞춤
-  - [ ] 1단계 k6 시나리오로 초과 예약 재현 후 결과 기록
+  - [x] 1단계 k6 시나리오로 초과 예약 재현 후 결과 기록 (2026-09-12) — 201 이 1,996건, 초과 예약 1,896건, 최종 remaining 0. 전문은 [performance/2026-09-12-stage1-naive.md](./performance/2026-09-12-stage1-naive.md)
+    - SQL 로그(`debug`/`trace`)가 켜진 채 측정됨. 지연 비교용으로 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 한 번 더 돌려 기록에 덧붙인다
+    - `Thread.sleep` 없이도 재현되므로 넣지 않는다
   - [ ] 2단계 재시도 계층 (트랜잭션 바깥, 새 트랜잭션)
 - [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
   - 점주: `POST /api/owner/stores`, `GET /api/owner/stores/me`, `POST /api/owner/stores/{storeUid}/items` (`OwnerStoreController`, BUSINESS_OWNER)
@@ -215,5 +217,8 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 - [ ] Actuator + Micrometer
 - [ ] Prometheus / Grafana
 - [ ] 불변식 검증 지표 — 초과 예약 0건, 재고 복구 1회
-- [ ] k6 부하 테스트 시나리오 (재고 100 / 요청 10,000)
+- [x] k6 부하 테스트 시나리오 (재고 100 / 요청 10,000) — `IEUM_BE/scripts/k6/create-order.js` (2026-09-12). 로그인은 `setup()` 에서 `http.batch` 로 병렬 처리, `shared-iterations` 로 소비자 1인 1요청
+  - k6 는 호스트에 winget 으로 설치 (v2.2.0). 서버가 호스트에서 돌고 있어 컨테이너 k6 보다 변수가 적다. 컨테이너로 옮길 때는 `AUTH_URL`/`API_URL` 을 `host.docker.internal` 로
+  - `setup()` 반환값은 VU 마다 복사되므로 VU 100 을 상한으로 둔다. 더 올리려면 토큰을 파일로 뽑아 `SharedArray` 로 읽는 방식으로
+  - 라운드 기록 순서: k6 요약 → DB 확인 쿼리 → 실행 조건 → 그 다음에 `reset-loadtest.sql`
 - [ ] 병목 측정 결과를 근거로 V2 착수 여부 판단
