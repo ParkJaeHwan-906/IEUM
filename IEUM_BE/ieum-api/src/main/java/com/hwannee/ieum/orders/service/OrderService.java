@@ -1,6 +1,7 @@
 package com.hwannee.ieum.orders.service;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
+import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.exception.OrderException;
 import com.hwannee.ieum.orders.repository.UsersOrdersRepository;
@@ -14,6 +15,7 @@ import com.hwannee.ieum.users.repository.UsersAccountRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -32,23 +34,21 @@ public class OrderService {
         this.stock = stock;
     }
 
-    // 사용자 식별자는 요청 본문이 아니라 토큰(@CurrentUser)에서만 온다 (ADR-0001)
     @Transactional
     public OrderResponse create(AuthenticatedUser user, CreateOrderRequest request, String idempotencyKey) {
-        // TODO(2.2 멱등성): (user.uid, idempotencyKey) 로 저장된 결과가 있으면
-        //   같은 본문 → 그 결과를 그대로 반환, 다른 본문 → IdempotencyKeyReused. 보존 24시간. 저장소는 Redis
         UsersAccount account = accounts.findByUid(user.uid()).orElseThrow(OrderException.AccountNotFound::new);
         StoresItems item = items.findByUid(request.itemUid()).orElseThrow(OrderException.ItemNotFound::new);
 
-        // TODO(2.2 판매 조건): item.getStore().isShutdown() 이거나 now > item.getLastOrderTime() 이면 ItemNotOnSale
-        // TODO(2.2 중복 예약): orders.existsByAccountAndItemInStates(account.getId(), item.getId(), OrderState.ACTIVE) → DuplicateActiveOrder
-        //   1·2단계에서는 여기서 검사하고, 3단계에서는 Lua 스크립트 안으로 옮겨 동시 요청 사이의 틈을 닫는다
+        if (item.getStore().isShutdown() || LocalDateTime.now().isAfter(item.getLastOrderTime())) {
+            throw new OrderException.ItemNotOnSale();
+        }
+
+        if (orders.existsByAccountAndItemInStates(account.getId(), item.getId(), OrderState.ACTIVE)) {
+            throw new OrderException.DuplicateActiveOrder();
+        }
 
         stock.deduct(item.getId(), request.quantity());
         UsersOrders order = orders.save(new UsersOrders(account, item, request.quantity()));
-
-        // TODO(2.2 멱등성): 결과 저장
-        // TODO(관측): 예약 성공·거절 카운터 (README Reservation Correctness)
         return OrderResponse.from(order);
     }
 
