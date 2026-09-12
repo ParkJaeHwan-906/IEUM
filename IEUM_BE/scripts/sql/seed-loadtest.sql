@@ -1,7 +1,10 @@
 -- 부하 테스트 시드. 점주 1명, 가게 1개, 재고 100 인 상품 1개, 소비자 N명을 만든다.
 -- 다시 실행하면 기존 부하 테스트 데이터를 지우고 새로 만든다 (이메일 도메인 @loadtest.ieum 기준).
 --
--- 실행:  mysql -h 127.0.0.1 -P 3306 -u <MYSQL_USER> -p <MYSQL_DATABASE> < scripts/sql/seed-loadtest.sql
+-- 실행 (호스트에 mysql 클라이언트가 없으므로 컨테이너의 클라이언트에 파이프로 넘긴다. IEUM_BE 에서):
+--   PowerShell: Get-Content -Raw -Encoding utf8 scripts/sql/seed-loadtest.sql | docker exec -i ieum-mysql mysql --default-character-set=utf8mb4 -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE>
+--   Git Bash:   docker exec -i ieum-mysql mysql --default-character-set=utf8mb4 -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE> < scripts/sql/seed-loadtest.sql
+--   --default-character-set=utf8mb4 가 없으면 컨테이너 클라이언트가 latin1 로 떨어져 한글 INSERT 가 "Data too long for column" 으로 실패한다
 -- 전제:  두 서버를 한 번 기동해 Hibernate(ddl-auto=update) 가 테이블을 만든 뒤에 실행한다.
 --
 -- 고정 값 (k6 스크립트에서 그대로 사용)
@@ -12,7 +15,7 @@
 --
 -- TODO(3단계 Redis): 시드 후 stock:{item_id} 키를 100 으로 SET 하는 단계 추가 (또는 API 서버 기동 시 워밍업)
 
-SET @consumers = 1000;
+SET @consumers = 10000;
 SET @password_hash = '$2a$10$g.wCArFuHKZzC20xuWdkR.mkW.8Zzp9GCKGy4mR7UCQ.rGm0jLiDm';  -- BCrypt("password1")
 SET @owner_uid = '11111111-1111-1111-1111-111111111111';
 SET @store_uid = '22222222-2222-2222-2222-222222222222';
