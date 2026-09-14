@@ -10,8 +10,10 @@
 // 결과 읽는 법:
 //   created 201   성공 건수. 정확히 100 이어야 정상. 1단계(naive)에서는 100 을 넘는 것(초과 예약)이 재현 목표
 //   sold out 409  재고 소진 이후의 정상 거절
+//   contention 503  재시도 상한(STOCK_RETRY_MAX_ATTEMPTS)까지 @Version 충돌만 겪고 답을 못 준 요청. optimistic 에서만 나오며,
+//                   재고가 남아 있는데도 거절된 건수라 2단계의 핵심 수치. naive·redis 에서 0 이 아니면 재시도 계층이 새는 것
 //   http_req_duration{name:create-order}  예약 요청만의 지연. p(99) 를 기록한다
-//   http_req_failed  0 이 아니면 500 이 섞인 것. API 서버 로그 확인
+//   http_req_failed  k6 는 4xx·5xx 를 전부 실패로 세므로 409·503 도 포함된다. 세 체크의 ✓ 합이 요청 수보다 작을 때만 오류(401/500). API 서버 로그 확인
 //   DB 불변식은 reset-loadtest.sql 상단 주석의 쿼리로 확인 (initial = remaining + 활성 주문 수량)
 
 import http from 'k6/http'
@@ -98,9 +100,10 @@ export default function (data) {
             tags: { name: 'create-order' },
         },
     );
-    // 둘 다 실패하는 응답(401, 500 등)은 두 체크 모두에서 빠지므로 합이 총 요청 수보다 작으면 그만큼이 오류다
+    // 어느 체크에도 걸리지 않는 응답(401, 500 등)은 세 체크 모두에서 빠지므로 합이 총 요청 수보다 작으면 그만큼이 오류다
     check(res, {
         'created 201': (r) => r.status === 201,
         'sold out 409': (r) => r.status === 409,
+        'contention 503': (r) => r.status === 503,
     });
 }
