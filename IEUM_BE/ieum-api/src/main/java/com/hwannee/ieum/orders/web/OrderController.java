@@ -2,6 +2,7 @@ package com.hwannee.ieum.orders.web;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
 import com.hwannee.ieum.auth.verify.principal.CurrentUser;
+import com.hwannee.ieum.orders.service.OrderCreateRetrier;
 import com.hwannee.ieum.orders.service.OrderService;
 import com.hwannee.ieum.orders.web.dto.CreateOrderRequest;
 import com.hwannee.ieum.orders.web.dto.OrderResponse;
@@ -24,9 +25,11 @@ import java.util.List;
 public class OrderController {
 
     private final OrderService orderService;
+    private final OrderCreateRetrier orderCreateRetrier;
 
-    public OrderController(OrderService orderService) {
+    public OrderController(OrderService orderService, OrderCreateRetrier orderCreateRetrier) {
         this.orderService = orderService;
+        this.orderCreateRetrier = orderCreateRetrier;
     }
 
     // Idempotency-Key 는 필수 헤더. 없으면 MissingRequestHeaderException → 400 ProblemDetail
@@ -37,7 +40,7 @@ public class OrderController {
     public OrderResponse create(@CurrentUser AuthenticatedUser user,
                                 @RequestHeader("Idempotency-Key") String idempotencyKey,
                                 @Valid @RequestBody CreateOrderRequest request) {
-        return orderService.create(user, request, idempotencyKey);
+        return orderCreateRetrier.create(user, request, idempotencyKey);
     }
 
     @GetMapping("/me")
