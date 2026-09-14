@@ -270,7 +270,7 @@ management:
 | `order.create.attempts{outcome=conflict}` | `..._total{outcome="conflict"}` | 충돌한 시도 수 (요청당 여러 번) |
 | `order.create.attempts{outcome=exhausted}` | `..._total{outcome="exhausted"}` | 상한 소진 요청 수 (= 503 건수) |
 | `order.create.attempts.used` | `order_create_attempts_used_bucket{le="1|2|3"}` | 성공까지 걸린 시도 횟수 분포 |
-| `hikaricp.connections.pending` | `hikaricp_connections_pending{name="IeumHikariPool"}` | 커넥션 대기 스레드 수 (게이지) |
+| `hikaricp.connections.pending` | `hikaricp_connections_pending{pool="IeumHikariPool"}` | 커넥션 대기 스레드 수 (게이지) |
 | `hikaricp.connections.acquire` | `hikaricp_connections_acquire_seconds_{count,sum,max}` | 커넥션 획득 시간 (누적) |
 
 `pending` 은 **게이지** 라 측정이 끝난 뒤 스냅샷을 찍으면 0 이다. 실행 중에 주기적으로 긁어야 최댓값이 나온다.
