@@ -7,7 +7,12 @@ import java.time.Duration;
 
 @ConfigurationProperties(prefix = "ieum.order")
 public record OrderProperties(
-        @DefaultValue("PT15M") Duration pickupTtl
-        // TODO(2.2 멱등성): idempotencyTtl (기본 P1D)
+        @DefaultValue("PT15M") Duration pickupTtl,
+        @DefaultValue Retry retry
 ) {
+    public record Retry(
+            @DefaultValue("3") int maxAttempts,
+            @DefaultValue("PT0.01S") Duration backoff
+    ) {
+    }
 }
