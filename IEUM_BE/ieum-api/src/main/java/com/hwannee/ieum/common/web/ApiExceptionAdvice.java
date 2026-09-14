@@ -2,9 +2,12 @@ package com.hwannee.ieum.common.web;
 
 import com.hwannee.ieum.common.exception.ApiException;
 import com.hwannee.ieum.orders.domain.InvalidOrderStateException;
+import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
-import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
@@ -23,9 +26,13 @@ public class ApiExceptionAdvice {
     }
 
     // 2단계(optimistic)에서 재시도를 모두 소진했을 때 클라이언트가 받는 응답
-    // TODO(2단계 재시도): 재시도 계층이 생기면 여기 도달하는 것은 "최종 실패"만이어야 한다
-    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
-    public ProblemDetail optimisticLockConflict(ObjectOptimisticLockingFailureException e) {
-        return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, "요청이 몰려 처리하지 못했습니다. 다시 시도해 주세요.");
+    @ExceptionHandler(OptimisticLockingFailureException.class)
+    public ResponseEntity<ProblemDetail> optimisticLockExhausted(OptimisticLockingFailureException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(
+                HttpStatus.SERVICE_UNAVAILABLE, "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header(HttpHeaders.RETRY_AFTER, "1")
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
     }
 }
