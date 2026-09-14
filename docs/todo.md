@@ -174,10 +174,10 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - 도메인: `OrderState.EXPIRED`·`ACTIVE` 집합, `UsersOrders.readyAt`·전이 가드·`expire()`, `InvalidOrderStateException`, 리포지토리 조회 메서드
   - 남은 TODO 는 코드의 `// TODO(...)` 주석에 있음. 라벨은 이 문서의 절 번호와 맞춤
   - [x] 1단계 k6 시나리오로 초과 예약 재현 후 결과 기록 (2026-09-12) — 201 이 1,996건, 초과 예약 1,896건, 최종 remaining 0. 전문은 [performance/2026-09-12-stage1-naive.md](./performance/2026-09-12-stage1-naive.md)
-    - SQL 로그(`debug`/`trace`)가 켜진 채 측정됨. 지연 비교용으로 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 한 번 더 돌려 기록에 덧붙인다
+    - SQL 로그(`debug`/`trace`)가 켜진 채 측정됨. 2026-09-14 에 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 같은 문서에 덧붙임 — 201 이 2,000건, p99 663ms, ≈ 493 req/s 로 로그 켠 값과 편차 안. 로그는 병목이 아니었음
     - `Thread.sleep` 없이도 재현되므로 넣지 않는다
   - [ ] **2단계 낙관적 락 + 재시도 계층** ← 다음 작업
-    - [ ] 0. 1단계를 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 performance 기록에 덧붙임 (지연 비교의 기준선)
+    - [x] 0. 1단계를 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 performance 기록에 덧붙임 (지연 비교의 기준선, 2026-09-14). 지연 차이는 편차 안이라 병목 후보는 HikariCP 대기·트랜잭션당 왕복 수로 좁혀짐 → 4번 계측에서 확인
     - [ ] 1. 재시도 계층 — `OrderService.create` 를 감싸는 별도 빈 (`orders/service/OrderCreateRetrier` 또는 유사)
       - 왜 별도 빈인가: `create` 가 `@Transactional` 이라 충돌은 커밋 시점에 프록시 밖으로 `ObjectOptimisticLockingFailureException` 으로 나온다. 같은 빈 안에서 catch 해 재호출하면 프록시를 거치지 않아 새 트랜잭션이 열리지 않는다
       - 컨트롤러는 `OrderService` 가 아니라 이 빈을 호출. `naive`·`redis` 전략에서는 충돌이 없어 한 번에 통과하므로 전략과 무관하게 같은 경로를 탄다
