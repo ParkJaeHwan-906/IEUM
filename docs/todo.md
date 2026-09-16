@@ -178,6 +178,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
     - `Thread.sleep` 없이도 재현되므로 넣지 않는다
   - [ ] **2단계 낙관적 락 + 재시도 계층** ← 다음 작업 — 구현 순서와 함정은 [2단계 가이드](./guides/stage2-optimistic-retry-guide.md)
     - [x] 0. 1단계를 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 performance 기록에 덧붙임 (지연 비교의 기준선, 2026-09-14). 지연 차이는 편차 안이라 병목 후보는 HikariCP 대기·트랜잭션당 왕복 수로 좁혀짐 → 4번 계측에서 확인
+    - [x] 0-b. 1단계를 계측 포함으로 재측정 (2026-09-16, 같은 문서에 덧붙임) — 0번에는 HikariCP·attempts 지표가 없어 라운드 1 의 "지연은 커넥션 대기" 해석을 전략 비용과 실험 조건으로 가를 수 없었음. 결과: naive 도 `pending` 80 / `acquire` 141ms 로 같음 → 풀 앞의 줄은 VU 100 / 풀 20 의 성질. 롤백 0, `version` 0 (벌크 UPDATE 의 `@Version` 우회 증거)
     - [x] 1. 재시도 계층 — `OrderService.create` 를 감싸는 별도 빈 (`orders/service/OrderCreateRetrier` 또는 유사)
       - 왜 별도 빈인가: `create` 가 `@Transactional` 이라 충돌은 커밋 시점에 프록시 밖으로 `ObjectOptimisticLockingFailureException` 으로 나온다. 같은 빈 안에서 catch 해 재호출하면 프록시를 거치지 않아 새 트랜잭션이 열리지 않는다
       - 컨트롤러는 `OrderService` 가 아니라 이 빈을 호출. `naive`·`redis` 전략에서는 충돌이 없어 한 번에 통과하므로 전략과 무관하게 같은 경로를 탄다
@@ -198,7 +199,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
       - [ ] 라운드 2 — 데드락 수정 후 같은 조건으로 재측정, 같은 문서에 이어서 기록
         - [ ] `OptimisticLockStockDeduction.deduct` 에서 `decreaseQuantity` 뒤 flush → UPDATE 가 INSERT 보다 먼저 나가 X 락을 선점. flush 시점 충돌은 리포지토리 예외 번역으로 `ObjectOptimisticLockingFailureException` 이 되어 재시도 계층이 그대로 잡음
         - [ ] `OrderCreateRetrier` 가 `CannotAcquireLockException`(데드락 희생자) 도 재시도. 카운터에 `outcome=deadlock` 태그 추가, 단위 테스트 케이스 추가
-        - [ ] `reset-loadtest.sql` 에 `ALTER TABLE users_orders AUTO_INCREMENT = 1` 추가 — `MAX(id) − COUNT(*)` 가 해당 라운드의 롤백 수를 바로 가리키게
+        - [x] `reset-loadtest.sql` 에 `ALTER TABLE users_orders AUTO_INCREMENT = 1` 추가 (2026-09-16) — `MAX(id) − COUNT(*)` 가 해당 라운드의 롤백 수를 바로 가리키게. `information_schema.TABLES` 는 하루 캐시라 확인은 `information_schema_stats_expiry = 0` 후
         - [ ] 기대: 500 이 0. 데드락으로 죽던 트랜잭션이 `@Version` 검사까지 가므로 충돌·503 은 늘 수 있음 — 그 수치가 "재고가 있는데 답을 못 준 요청" 의 진짜 값
     - [ ] (선택) 7. 조건부 UPDATE 한 문장 — `StoresItemsRepository` 의 TODO(2.1 선택 단계). `@Version` 없이 재시도도 없는 중간 데이터 포인트. 시간이 허락하면 같은 형식으로 측정
 - [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
