@@ -2,6 +2,8 @@ package com.hwannee.ieum.common.web;
 
 import com.hwannee.ieum.common.exception.ApiException;
 import com.hwannee.ieum.orders.domain.InvalidOrderStateException;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.ConcurrencyFailureException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -25,9 +27,8 @@ public class ApiExceptionAdvice {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
     }
 
-    // 2단계(optimistic)에서 재시도를 모두 소진했을 때 클라이언트가 받는 응답
-    @ExceptionHandler(OptimisticLockingFailureException.class)
-    public ResponseEntity<ProblemDetail> optimisticLockExhausted(OptimisticLockingFailureException e) {
+    @ExceptionHandler({OptimisticLockingFailureException.class, CannotAcquireLockException.class})
+    public ResponseEntity<ProblemDetail> contentionExhausted(ConcurrencyFailureException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
                 HttpStatus.SERVICE_UNAVAILABLE, "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
