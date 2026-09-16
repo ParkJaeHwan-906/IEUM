@@ -242,8 +242,163 @@ running (02m56.9s), 000/100 VUs, 10000 complete and 0 interrupted iterations
 order ✓ [======================================] 100 VUs  00m20.3s/10m0s  10000/10000 shared iters
 ```
 
+## 재측정 2 — 계측 포함 (2026-09-16)
+
+09-14 재측정에는 HikariCP 대기와 `order.create.attempts` 지표가 없다. 계측은 2단계 4번에서 뒤늦게 들어갔다.
+2단계 라운드 1 은 "지연의 정체는 커넥션 대기" 라고 해석했는데, 그것이 낙관적 락의 비용인지 VU 100 / 풀 20 이라는 실험 조건의
+성질인지 가르려면 같은 지표를 naive 에서도 봐야 한다. 그래서 2단계 라운드 1 과 같은 코드에서 `STOCK_STRATEGY=naive` 로 한 번 더 돌렸다.
+
+### 실행 조건 (달라진 것만)
+
+| 항목 | 값 |
+|---|---|
+| 코드 | 2단계 라운드 1 과 같은 코드 (`dev_be` `0947d91` 이후 문서 커밋만 있음). `OrderCreateRetrier` 가 `OrderService.create` 를 감싸고 `/actuator/prometheus` 가 열려 있다. 작업 트리에 `OptimisticLockStockDeduction` 의 미커밋 변경(라운드 2 용 flush)이 있으나 naive 에서는 그 빈이 등록되지 않아 무관 |
+| 스크랩 | 2단계 가이드 4.4 의 `curl` 루프, 0.5초 간격 320회 → `scripts/k6/out/stage1-20260916-233859.prom` |
+| 라운드 전 | `reset-loadtest.sql` (이번부터 `AUTO_INCREMENT = 1` 포함) 로 재고 100 · 주문 0 · `version` 0 · AUTO_INCREMENT 1 확인 |
+
+### 결과 요약
+
+| 항목 | 값 (09-16, 계측) | 값 (09-14) | 출처 |
+|---|---|---|---|
+| 201 (예약 성공) | **1,996** | 2,000 | k6 `created 201`, `order_create_attempts_total{outcome="success"}` 도 1,996 |
+| 409 (재고 부족) | 8,004 | 8,000 | k6 `sold out 409` |
+| 503 / 500 | 0 / 0 | 0 / 0 | k6 `contention 503` 0, 세 체크 합 10,000 |
+| 초과 예약 | **1,896** | 1,900 | |
+| DB `PENDING` 주문 수 / 수량 합 | 1,996 / 1,996 | 2,000 / 2,000 | 아래 SQL |
+| DB `remaining_quantity` / `version` | 0 / **0** | 0 / (미기록) | 아래 SQL |
+| 불변식 `initial = remaining + active` | 깨짐 (100 ≠ 0 + 1,996) | 깨짐 | |
+| `order.create.attempts{conflict / exhausted}` | **0 / 0** | (미계측) | Prometheus |
+| 성공까지 시도 횟수 | 전부 1회 (`used_max` 1) | (미계측) | `order_create_attempts_used` |
+| 롤백된 주문 INSERT (`MAX(id) − COUNT(*)`) | **0** | (미기록) | 아래 SQL |
+| `hikaricp.connections.pending` 최대 / `active` 최대 | **80** / 20 | (미계측) | 스크랩 |
+| `hikaricp.connections.acquire` 평균 / 최대 | **141ms** (1,411.7s ÷ 10,002) / 712ms | (미계측) | Prometheus |
+| 재고 소진까지 | 약 10초 (23:42:04 → 23:42:14) | (미기록) | 스크랩·DB `created_at` |
+| 예약 요청 지연 med / p95 / p99 / max | 108ms / 491ms / 633ms / 1.43s | 104ms / 577ms / 663ms / 1.88s | k6 `{ name:create-order }` |
+| 로그인 지연 med / p95 / p99 / max | 83ms / 160ms / 172ms / 508ms | 77ms / 150ms / 164ms / 864ms | k6 `{ name:login }` |
+| 예약 구간 시간 | 18.9s | 20.3s | k6 진행 줄 `00m18.9s` |
+| 예약 처리량 | ≈ 529 req/s (10,000 ÷ 18.9s) | ≈ 493 req/s | 계산 |
+| 전체 실행 시간 | 3m04.4s (로그인 setup ≈ 2m45s 포함) | 2m56.9s | k6 `running (03m04.4s)` |
+
+### 해석
+
+**커넥션 대기는 전략과 무관한 실험 조건이다.** `pending` 이 예약 구간 내내 70~80, `active` 는 20 으로 고정이었다.
+2단계 라운드 1 의 72~80 / 20 과 같다. VU 100 이 커넥션 20 개를 나눠 쓰는 한 어떤 전략이든 80 개 요청은 항상 풀 앞에서
+기다린다. 라운드 1 이 "지연의 정체는 커넥션 대기" 라고 한 것은 낙관적 락의 비용이 아니라 이 부하 조건의 성질이다.
+전략 간 비교는 이 줄 위에서 무엇이 달라지는가(실패 시도의 롤백, 락 대기, 재시도) 로 봐야 한다.
+
+`acquire` 평균은 naive 141ms, optimistic 라운드 1 119ms 다. naive 는 재고가 10초 동안 살아 있어 INSERT 를 포함한 긴 트랜잭션이
+더 오래 이어졌고, optimistic 은 7초 만에 소진돼 이후 요청이 `SELECT` 한 번으로 끝났기 때문으로 보인다.
+naive 의 세 번 측정(09-12 · 09-14 · 09-16)은 201 이 1,996~2,000, p99 633~670ms, 493~529 req/s 범위 안에 있어 실행 간 편차로 본다.
+
+**`version` 이 0 이다.** 1,996 번의 차감이 있었는데 `@Version` 컬럼은 한 번도 오르지 않았다. naive 가 쓰는 JPQL 벌크 UPDATE 는
+`@Version` 검사도 증가도 거치지 않는다는 직접 증거다. 엔티티에 `@Version` 이 있어도 더티 체킹 UPDATE 를 타지 않으면 보호받지 못한다.
+
+**재시도 계층은 naive 에서 투명하다.** `conflict` 0, `exhausted` 0, 성공까지 시도 횟수 전부 1회, `success` 카운터가 201 건수와 일치한다.
+`OrderCreateRetrier` 를 모든 전략이 공통으로 지나가도 naive 의 결과는 바뀌지 않는다.
+
+**롤백된 INSERT 가 0 이다.** naive 에는 실패하는 트랜잭션이 없다. 2단계의 "실패 시도의 DB 비용" (라운드 1 에서 ≈ 2,048) 을 비교할 기준선이다.
+
+### DB 확인 쿼리 결과 (같은 쿼리 + 롤백 수)
+
+```text
+order_state	cnt	qty
+PENDING	1996	1996
+
+initial_quantity	remaining_quantity	version
+100	0	0
+
+max_id	cnt	rolled_back_inserts
+1996	1996	0
+
+MIN(created_at)	MAX(created_at)
+2026-09-16 23:42:03.980956	2026-09-16 23:42:13.753184
+```
+
+### 스크랩 타임라인 (초당 `pending` 최대 / `success` 누적)
+
+```text
+23:42:04  70 /   10
+23:42:05  80 /  273
+23:42:06  80 /  400
+23:42:07  80 /  692
+23:42:08  79 /  838
+23:42:09  80 / 1131
+23:42:10  80 / 1280
+23:42:11  79 / 1576
+23:42:12  79 / 1716
+23:42:13  79 / 1879
+23:42:14  75 / 1996   ← 재고 0, 이후 success 변화 없음
+23:42:15  74
+23:42:16  77
+23:42:17  80
+23:42:18  80
+23:42:19  80
+23:42:20  80
+23:42:21  79          ← 예약 구간 끝
+```
+
+재고가 0 이 된 뒤에도 `pending` 이 80 근처를 유지한다. 409 로 끝나는 짧은 트랜잭션도 커넥션은 잡아야 하므로 풀 앞의 줄은 사라지지 않는다.
+
+### k6 출력 (진행 줄 생략)
+
+```text
+PS D:\dev\IEUM\IEUM_BE> k6 run scripts/k6/create-order.js
+
+     execution: local
+        script: scripts/k6/create-order.js
+        output: -
+
+     scenarios: (100.00%) 1 scenario, 100 max VUs, 10m30s max duration (incl. graceful stop):
+              * order: 10000 iterations shared among 100 VUs (maxDuration: 10m0s, gracefulStop: 30s)
+
+
+  █ THRESHOLDS
+
+    http_req_duration{name:create-order}
+    ✓ 'p(99)<60000' p(99)=633.45ms
+
+    http_req_duration{name:login}
+    ✓ 'p(99)<60000' p(99)=172.35ms
+
+
+  █ TOTAL RESULTS
+
+    checks_total.......: 30000  162.663179/s
+    checks_succeeded...: 33.33% 10000 out of 30000
+    checks_failed......: 66.66% 20000 out of 30000
+
+    ✗ created 201
+      ↳  19% — ✓ 1996 / ✗ 8004
+    ✗ sold out 409
+      ↳  80% — ✓ 8004 / ✗ 1996
+    ✗ contention 503
+      ↳  0% — ✓ 0 / ✗ 10000
+
+    HTTP
+    http_req_duration..............: avg=137.76ms med=88.63ms  p(95)=461.75ms p(99)=548.32ms max=1.43s
+      { expected_response:true }...: avg=159.47ms med=85.27ms  p(95)=483.6ms  p(99)=558.83ms max=1.43s
+      { name:create-order }........: avg=180.78ms med=108.46ms p(95)=491.05ms p(99)=633.45ms max=1.43s
+      { name:login }...............: avg=94.74ms  med=83.26ms  p(95)=159.87ms p(99)=172.35ms max=508.06ms
+    http_req_failed................: 40.02% 8004 out of 20000
+    http_reqs......................: 20000  108.44212/s
+
+    EXECUTION
+    iteration_duration.............: avg=181.53ms med=109.04ms p(95)=491.09ms p(99)=637.16ms max=1.59s
+    iterations.....................: 10000  54.22106/s
+    vus............................: 100    min=0             max=100
+    vus_max........................: 100    min=100           max=100
+
+    NETWORK
+    data_received..................: 17 MB  92 kB/s
+    data_sent......................: 12 MB  64 kB/s
+
+
+running (03m04.4s), 000/100 VUs, 10000 complete and 0 interrupted iterations
+order ✓ [======================================] 100 VUs  00m18.9s/10m0s  10000/10000 shared iters
+```
+
 ## 다음 라운드 전
 
-`IEUM_BE/scripts/sql/reset-loadtest.sql` 로 재고·주문을 초기화한다 (09-14 재측정 뒤 실행해 둔 상태).
+`IEUM_BE/scripts/sql/reset-loadtest.sql` 로 재고·주문을 초기화한다 (09-16 재측정 2 뒤 실행해 둔 상태, AUTO_INCREMENT 도 1).
 2단계부터는 `.env` 에 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 를 넣고 두 서버를 재기동한 뒤 실행하며,
-지연 비교는 위 재측정 절의 값과 한다.
+지연 비교는 09-14 재측정 값과, 커넥션 대기·롤백 수 비교는 09-16 재측정 2 값과 한다.
