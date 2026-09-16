@@ -197,7 +197,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
       - ADR-0003 에 "Version 으로 해결되는 것(초과 예약)과 남는 것(재고가 있는데 답을 못 주는 소진 실패, 실패 시도의 DB 비용, 재고 행 밖의 불변식, 처리량 상한)" 을 측정 수치와 함께 기록
       - [x] 라운드 1 (2026-09-14) — 201 정확히 100, 초과 예약 0, 불변식 성립. **그러나 1,926건(19%)이 MySQL FK 데드락으로 500.** `INSERT users_orders`(FK 검사 S 락) → flush 시 `UPDATE stores_items`(X 락) 순서가 원인. 전문은 [performance/2026-09-14-stage2-optimistic.md](./performance/2026-09-14-stage2-optimistic.md)
       - [ ] 라운드 2 — 데드락 수정 후 같은 조건으로 재측정, 같은 문서에 이어서 기록
-        - [ ] `OptimisticLockStockDeduction.deduct` 에서 `decreaseQuantity` 뒤 flush → UPDATE 가 INSERT 보다 먼저 나가 X 락을 선점. flush 시점 충돌은 리포지토리 예외 번역으로 `ObjectOptimisticLockingFailureException` 이 되어 재시도 계층이 그대로 잡음
+        - [x] `OptimisticLockStockDeduction.deduct` 에서 `decreaseQuantity` 뒤 flush (2026-09-16, `b25ad9e`) → UPDATE 가 INSERT 보다 먼저 나가 X 락을 선점. flush 시점 충돌은 리포지토리 예외 번역으로 `ObjectOptimisticLockingFailureException` 이 되어 재시도 계층이 그대로 잡음
         - [ ] `OrderCreateRetrier` 가 `CannotAcquireLockException`(데드락 희생자) 도 재시도. 카운터에 `outcome=deadlock` 태그 추가, 단위 테스트 케이스 추가
         - [x] `reset-loadtest.sql` 에 `ALTER TABLE users_orders AUTO_INCREMENT = 1` 추가 (2026-09-16) — `MAX(id) − COUNT(*)` 가 해당 라운드의 롤백 수를 바로 가리키게. `information_schema.TABLES` 는 하루 캐시라 확인은 `information_schema_stats_expiry = 0` 후
         - [ ] 기대: 500 이 0. 데드락으로 죽던 트랜잭션이 `@Version` 검사까지 가므로 충돌·503 은 늘 수 있음 — 그 수치가 "재고가 있는데 답을 못 준 요청" 의 진짜 값
