@@ -201,7 +201,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
         - [x] `OrderCreateRetrier` 가 `CannotAcquireLockException`(데드락 희생자) 도 재시도 (2026-09-17). 카운터에 `outcome=deadlock` 태그 추가, `ApiExceptionAdvice` 503 핸들러를 두 예외로 확장, 단위 테스트 4건 추가 (데드락 후 성공 / 상한까지 데드락 / 충돌·데드락 혼합 / 락 대기 타임아웃 미재시도). 배경은 [2단계 가이드 9절](./guides/stage2-optimistic-retry-guide.md#9-라운드-2--fk-데드락과-flush-순서)
         - [x] `reset-loadtest.sql` 에 `ALTER TABLE users_orders AUTO_INCREMENT = 1` 추가 (2026-09-16) — `MAX(id) − COUNT(*)` 가 해당 라운드의 롤백 수를 바로 가리키게. `information_schema.TABLES` 는 하루 캐시라 확인은 `information_schema_stats_expiry = 0` 후
         - [x] 기대: 500 이 0. 데드락으로 죽던 트랜잭션이 `@Version` 검사까지 가므로 충돌·503 은 늘 수 있음 — 그 수치가 "재고가 있는데 답을 못 준 요청" 의 진짜 값 → 실측 500 0 / 503 574
-    - [ ] (선택) 7. 조건부 UPDATE 한 문장 — `StoresItemsRepository` 의 TODO(2.1 선택 단계). `@Version` 없이 재시도도 없는 중간 데이터 포인트. 시간이 허락하면 같은 형식으로 측정
+    - [ ] (선택) 7. 조건부 UPDATE 한 문장 — `StoresItemsRepository` 의 TODO(2.1 선택 단계). `@Version` 없이 재시도도 없는 중간 데이터 포인트. 시간이 허락하면 같은 형식으로 측정 — 구현·측정 절차는 [조건부 UPDATE 가이드](./guides/stage2-conditional-update-guide.md)
 - [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
   - 점주: `POST /api/owner/stores`, `GET /api/owner/stores/me`, `POST /api/owner/stores/{storeUid}/items` (`OwnerStoreController`, BUSINESS_OWNER)
   - 공개: `GET /api/stores/{storeUid}`, `GET /api/stores/{storeUid}/items`, `GET /api/items/{itemUid}` (permitAll 경로)
