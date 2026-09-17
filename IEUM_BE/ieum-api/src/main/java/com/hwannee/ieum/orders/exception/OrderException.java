@@ -28,6 +28,10 @@ public abstract class OrderException extends ApiException {
     }
 
     public static final class InsufficientStock extends OrderException {
+        public InsufficientStock() {
+            super(HttpStatus.CONFLICT, "재고가 부족합니다.");
+        }
+
         public InsufficientStock(int remaining) {
             super(HttpStatus.CONFLICT, "재고가 부족합니다. 남은 수량: " + remaining);
         }
