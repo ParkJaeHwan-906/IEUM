@@ -161,7 +161,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   3. Redis — Lua Script 로 원자적 차감 (README 설계). Redis 를 재고 원장으로 쓰고 DB 는 결과를 기록
      - 분산락(SETNX/Redisson)은 채택하지 않음. 락 TTL·커밋 전 해제 문제가 있고 여전히 직렬화라 처리량 상한이 락 보유 시간에 묶임. 문서에 절충안으로만 한 줄 언급
      - 문제가 "동시성"에서 "Redis↔DB 정합성"으로 옮겨 감 → 2.2 의 재고 복구 멱등성·Expiry Worker·Reconciliation 이 그 답
-  - (선택) 2 와 3 사이에 조건부 UPDATE 한 문장(`SET remaining = remaining - ? WHERE id = ? AND remaining >= ?`) 을 중간 데이터 포인트로 추가. `@Version` 없이도 정합성이 맞고 재시도가 없어, 낙관적 락의 비용이 어디서 오는지 분리해 보여 줌
+  - [x] (선택) 2 와 3 사이에 조건부 UPDATE 한 문장(`SET remaining = remaining - ? WHERE id = ? AND remaining >= ?`) 을 중간 데이터 포인트로 추가. `@Version` 없이도 정합성이 맞고 재시도가 없어, 낙관적 락의 비용이 어디서 오는지 분리해 보여 줌 (2026-09-17 측정 완료)
   - 측정 항목: 최종 `remainingQuantity`, 성공 건수(정확히 100 이어야 함), p99 지연, DB 커넥션 대기, 재시도 횟수
   - 각 단계는 프로파일 또는 전략 인터페이스로 갈아 끼울 수 있게 두고 결과를 [ADR-0003](./adr/0003-stock-deduction-concurrency.md) 에 남긴다 (2026-09-12 작성, 1단계까지 기록)
 
@@ -176,7 +176,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - [x] 1단계 k6 시나리오로 초과 예약 재현 후 결과 기록 (2026-09-12) — 201 이 1,996건, 초과 예약 1,896건, 최종 remaining 0. 전문은 [performance/2026-09-12-stage1-naive.md](./performance/2026-09-12-stage1-naive.md)
     - SQL 로그(`debug`/`trace`)가 켜진 채 측정됨. 2026-09-14 에 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 같은 문서에 덧붙임 — 201 이 2,000건, p99 663ms, ≈ 493 req/s 로 로그 켠 값과 편차 안. 로그는 병목이 아니었음
     - `Thread.sleep` 없이도 재현되므로 넣지 않는다
-  - [x] **2단계 낙관적 락 + 재시도 계층** (2026-09-17 라운드 2 까지 완료, (선택) 7 만 남음) — 구현 순서와 함정은 [2단계 가이드](./guides/stage2-optimistic-retry-guide.md)
+  - [x] **2단계 낙관적 락 + 재시도 계층** (2026-09-17 라운드 2 와 (선택) 7 까지 완료) — 구현 순서와 함정은 [2단계 가이드](./guides/stage2-optimistic-retry-guide.md)
     - [x] 0. 1단계를 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 performance 기록에 덧붙임 (지연 비교의 기준선, 2026-09-14). 지연 차이는 편차 안이라 병목 후보는 HikariCP 대기·트랜잭션당 왕복 수로 좁혀짐 → 4번 계측에서 확인
     - [x] 0-b. 1단계를 계측 포함으로 재측정 (2026-09-16, 같은 문서에 덧붙임) — 0번에는 HikariCP·attempts 지표가 없어 라운드 1 의 "지연은 커넥션 대기" 해석을 전략 비용과 실험 조건으로 가를 수 없었음. 결과: naive 도 `pending` 80 / `acquire` 141ms 로 같음 → 풀 앞의 줄은 VU 100 / 풀 20 의 성질. 롤백 0, `version` 0 (벌크 UPDATE 의 `@Version` 우회 증거)
     - [x] 1. 재시도 계층 — `OrderService.create` 를 감싸는 별도 빈 (`orders/service/OrderCreateRetrier` 또는 유사)
@@ -201,7 +201,10 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
         - [x] `OrderCreateRetrier` 가 `CannotAcquireLockException`(데드락 희생자) 도 재시도 (2026-09-17). 카운터에 `outcome=deadlock` 태그 추가, `ApiExceptionAdvice` 503 핸들러를 두 예외로 확장, 단위 테스트 4건 추가 (데드락 후 성공 / 상한까지 데드락 / 충돌·데드락 혼합 / 락 대기 타임아웃 미재시도). 배경은 [2단계 가이드 9절](./guides/stage2-optimistic-retry-guide.md#9-라운드-2--fk-데드락과-flush-순서)
         - [x] `reset-loadtest.sql` 에 `ALTER TABLE users_orders AUTO_INCREMENT = 1` 추가 (2026-09-16) — `MAX(id) − COUNT(*)` 가 해당 라운드의 롤백 수를 바로 가리키게. `information_schema.TABLES` 는 하루 캐시라 확인은 `information_schema_stats_expiry = 0` 후
         - [x] 기대: 500 이 0. 데드락으로 죽던 트랜잭션이 `@Version` 검사까지 가므로 충돌·503 은 늘 수 있음 — 그 수치가 "재고가 있는데 답을 못 준 요청" 의 진짜 값 → 실측 500 0 / 503 574
-    - [ ] (선택) 7. 조건부 UPDATE 한 문장 — `StoresItemsRepository` 의 TODO(2.1 선택 단계). `@Version` 없이 재시도도 없는 중간 데이터 포인트. 시간이 허락하면 같은 형식으로 측정 — 구현·측정 절차는 [조건부 UPDATE 가이드](./guides/stage2-conditional-update-guide.md)
+    - [x] (선택) 7. 조건부 UPDATE 한 문장 (2026-09-17) — `ConditionalUpdateStockDeduction`, `STOCK_STRATEGY=conditional`. 구현·측정 절차는 [조건부 UPDATE 가이드](./guides/stage2-conditional-update-guide.md)
+      - 결과: 201 정확히 100, **503 0, 충돌 0, 커넥션 획득 정확히 10,000, `version` 0**. 재고 소진 0.76초 (라운드 2 는 5초), p95 236ms / p99 669ms, ≈ 758 req/s. 행 락 대기 118회 · 평균 117ms (처음 측정). 전문은 [performance/2026-09-17-stage2-conditional-update.md](./performance/2026-09-17-stage2-conditional-update.md)
+      - 라운드 2 의 503 574 는 재시도 상한의 산물이었고, p99 는 naive 와 같은 수준이라 정체는 VU 100 / 풀 20 커넥션 대기. ADR-0003 "낙관적 락 비용의 분해" 에 기록
+      - 부수 관찰: 주문 `order_price` 가 `original_price`(5,000) 로 저장됨. `sale_price` 가 맞는지 `UsersOrders` 생성자 확인 필요
 - [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
   - 점주: `POST /api/owner/stores`, `GET /api/owner/stores/me`, `POST /api/owner/stores/{storeUid}/items` (`OwnerStoreController`, BUSINESS_OWNER)
   - 공개: `GET /api/stores/{storeUid}`, `GET /api/stores/{storeUid}/items`, `GET /api/items/{itemUid}` (permitAll 경로)
