@@ -7,6 +7,7 @@ import com.hwannee.ieum.orders.web.dto.OrderResponse;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 
@@ -22,6 +23,7 @@ public class OrderCreateRetrier {
     private final Counter success;
     private final Counter conflict;
     private final Counter exhausted;
+    private final Counter deadlock;
     private final DistributionSummary attemptsUsed;
 
     public OrderCreateRetrier(OrderService orderService, OrderProperties properties, MeterRegistry registry) {
@@ -30,6 +32,7 @@ public class OrderCreateRetrier {
         this.success = outcome(registry, "success");
         this.conflict = outcome(registry, "conflict");
         this.exhausted = outcome(registry, "exhausted");
+        this.deadlock = outcome(registry, "deadlock");
         this.attemptsUsed = DistributionSummary.builder("order.create.attempts.used")
                 .serviceLevelObjectives(IntStream.rangeClosed(1, retry.maxAttempts()).asDoubleStream().toArray())
                 .register(registry);
@@ -42,8 +45,8 @@ public class OrderCreateRetrier {
                 success.increment();
                 attemptsUsed.record(attempt);
                 return response;
-            } catch (OptimisticLockingFailureException e) {
-                conflict.increment();
+            } catch (OptimisticLockingFailureException | CannotAcquireLockException e) {
+                (e instanceof CannotAcquireLockException ? deadlock : conflict).increment();
                 if (attempt >= retry.maxAttempts()) {
                     exhausted.increment();
                     throw e;

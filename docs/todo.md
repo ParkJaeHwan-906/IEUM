@@ -176,8 +176,9 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - [x] 1단계 k6 시나리오로 초과 예약 재현 후 결과 기록 (2026-09-12) — 201 이 1,996건, 초과 예약 1,896건, 최종 remaining 0. 전문은 [performance/2026-09-12-stage1-naive.md](./performance/2026-09-12-stage1-naive.md)
     - SQL 로그(`debug`/`trace`)가 켜진 채 측정됨. 2026-09-14 에 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 같은 문서에 덧붙임 — 201 이 2,000건, p99 663ms, ≈ 493 req/s 로 로그 켠 값과 편차 안. 로그는 병목이 아니었음
     - `Thread.sleep` 없이도 재현되므로 넣지 않는다
-  - [ ] **2단계 낙관적 락 + 재시도 계층** ← 다음 작업 — 구현 순서와 함정은 [2단계 가이드](./guides/stage2-optimistic-retry-guide.md)
+  - [x] **2단계 낙관적 락 + 재시도 계층** (2026-09-17 라운드 2 까지 완료, (선택) 7 만 남음) — 구현 순서와 함정은 [2단계 가이드](./guides/stage2-optimistic-retry-guide.md)
     - [x] 0. 1단계를 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 performance 기록에 덧붙임 (지연 비교의 기준선, 2026-09-14). 지연 차이는 편차 안이라 병목 후보는 HikariCP 대기·트랜잭션당 왕복 수로 좁혀짐 → 4번 계측에서 확인
+    - [x] 0-b. 1단계를 계측 포함으로 재측정 (2026-09-16, 같은 문서에 덧붙임) — 0번에는 HikariCP·attempts 지표가 없어 라운드 1 의 "지연은 커넥션 대기" 해석을 전략 비용과 실험 조건으로 가를 수 없었음. 결과: naive 도 `pending` 80 / `acquire` 141ms 로 같음 → 풀 앞의 줄은 VU 100 / 풀 20 의 성질. 롤백 0, `version` 0 (벌크 UPDATE 의 `@Version` 우회 증거)
     - [x] 1. 재시도 계층 — `OrderService.create` 를 감싸는 별도 빈 (`orders/service/OrderCreateRetrier` 또는 유사)
       - 왜 별도 빈인가: `create` 가 `@Transactional` 이라 충돌은 커밋 시점에 프록시 밖으로 `ObjectOptimisticLockingFailureException` 으로 나온다. 같은 빈 안에서 catch 해 재호출하면 프록시를 거치지 않아 새 트랜잭션이 열리지 않는다
       - 컨트롤러는 `OrderService` 가 아니라 이 빈을 호출. `naive`·`redis` 전략에서는 충돌이 없어 한 번에 통과하므로 전략과 무관하게 같은 경로를 탄다
@@ -191,15 +192,15 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
       - 카운터 `order.create.attempts` (tag: `outcome` = success | conflict | exhausted), 히스토그램 또는 tag 로 "성공까지 걸린 시도 횟수"
       - HikariCP 는 actuator 가 자동 노출 (`hikaricp.connections.pending`, `hikaricp.connections.acquire`). 측정 중 스크랩할 방법 결정 (Prometheus 컨테이너 vs 측정 직후 `curl` 로 스냅샷)
     - [x] 5. 테스트 — 재시도 빈 단위 테스트: 두 번 충돌 후 성공이면 3회 호출, 상한 초과면 예외 그대로 전파, `InsufficientStock` 은 재시도 없이 즉시 전파, 카운터 값 검증
-    - [~] 6. 측정 — `STOCK_STRATEGY=optimistic` 으로 같은 k6 시나리오. 기록할 것: 201 이 정확히 100 인지, 최종 `remaining_quantity`, 소진(exhausted) 건수, 시도 횟수 분포, `hikaricp.connections.pending` 최대, p99, 처리량
+    - [x] 6. 측정 (라운드 1 09-14, 라운드 2 09-17) — `STOCK_STRATEGY=optimistic` 으로 같은 k6 시나리오. 기록할 것: 201 이 정확히 100 인지, 최종 `remaining_quantity`, 소진(exhausted) 건수, 시도 횟수 분포, `hikaricp.connections.pending` 최대, p99, 처리량
       - `performance/<날짜>-stage2-optimistic.md` 에 1단계와 같은 형식으로, ADR-0003 결과 표 2단계 행 갱신
       - ADR-0003 에 "Version 으로 해결되는 것(초과 예약)과 남는 것(재고가 있는데 답을 못 주는 소진 실패, 실패 시도의 DB 비용, 재고 행 밖의 불변식, 처리량 상한)" 을 측정 수치와 함께 기록
       - [x] 라운드 1 (2026-09-14) — 201 정확히 100, 초과 예약 0, 불변식 성립. **그러나 1,926건(19%)이 MySQL FK 데드락으로 500.** `INSERT users_orders`(FK 검사 S 락) → flush 시 `UPDATE stores_items`(X 락) 순서가 원인. 전문은 [performance/2026-09-14-stage2-optimistic.md](./performance/2026-09-14-stage2-optimistic.md)
-      - [ ] 라운드 2 — 데드락 수정 후 같은 조건으로 재측정, 같은 문서에 이어서 기록
-        - [ ] `OptimisticLockStockDeduction.deduct` 에서 `decreaseQuantity` 뒤 flush → UPDATE 가 INSERT 보다 먼저 나가 X 락을 선점. flush 시점 충돌은 리포지토리 예외 번역으로 `ObjectOptimisticLockingFailureException` 이 되어 재시도 계층이 그대로 잡음
-        - [ ] `OrderCreateRetrier` 가 `CannotAcquireLockException`(데드락 희생자) 도 재시도. 카운터에 `outcome=deadlock` 태그 추가, 단위 테스트 케이스 추가
-        - [ ] `reset-loadtest.sql` 에 `ALTER TABLE users_orders AUTO_INCREMENT = 1` 추가 — `MAX(id) − COUNT(*)` 가 해당 라운드의 롤백 수를 바로 가리키게
-        - [ ] 기대: 500 이 0. 데드락으로 죽던 트랜잭션이 `@Version` 검사까지 가므로 충돌·503 은 늘 수 있음 — 그 수치가 "재고가 있는데 답을 못 준 요청" 의 진짜 값
+      - [x] 라운드 2 (2026-09-17) — 201 정확히 100, **500 0, `deadlock` 0, 롤백된 INSERT 0**. 충돌 1,894, 503 574 (5.7%) 가 "재고가 있는데 답을 못 준 요청" 의 진짜 값. p99 790ms, ≈ 719 req/s. 같은 문서에 이어서 기록, ADR-0003 표·결정 갱신
+        - [x] `OptimisticLockStockDeduction.deduct` 에서 `decreaseQuantity` 뒤 flush (2026-09-16, `b25ad9e`) → UPDATE 가 INSERT 보다 먼저 나가 X 락을 선점. flush 시점 충돌은 리포지토리 예외 번역으로 `ObjectOptimisticLockingFailureException` 이 되어 재시도 계층이 그대로 잡음
+        - [x] `OrderCreateRetrier` 가 `CannotAcquireLockException`(데드락 희생자) 도 재시도 (2026-09-17). 카운터에 `outcome=deadlock` 태그 추가, `ApiExceptionAdvice` 503 핸들러를 두 예외로 확장, 단위 테스트 4건 추가 (데드락 후 성공 / 상한까지 데드락 / 충돌·데드락 혼합 / 락 대기 타임아웃 미재시도). 배경은 [2단계 가이드 9절](./guides/stage2-optimistic-retry-guide.md#9-라운드-2--fk-데드락과-flush-순서)
+        - [x] `reset-loadtest.sql` 에 `ALTER TABLE users_orders AUTO_INCREMENT = 1` 추가 (2026-09-16) — `MAX(id) − COUNT(*)` 가 해당 라운드의 롤백 수를 바로 가리키게. `information_schema.TABLES` 는 하루 캐시라 확인은 `information_schema_stats_expiry = 0` 후
+        - [x] 기대: 500 이 0. 데드락으로 죽던 트랜잭션이 `@Version` 검사까지 가므로 충돌·503 은 늘 수 있음 — 그 수치가 "재고가 있는데 답을 못 준 요청" 의 진짜 값 → 실측 500 0 / 503 574
     - [ ] (선택) 7. 조건부 UPDATE 한 문장 — `StoresItemsRepository` 의 TODO(2.1 선택 단계). `@Version` 없이 재시도도 없는 중간 데이터 포인트. 시간이 허락하면 같은 형식으로 측정
 - [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
   - 점주: `POST /api/owner/stores`, `GET /api/owner/stores/me`, `POST /api/owner/stores/{storeUid}/items` (`OwnerStoreController`, BUSINESS_OWNER)

@@ -11,6 +11,9 @@ todo 2.2 의 "2단계 낙관적 락 + 재시도 계층" 1~6번을 순서대로 �
 
 ## 0. 지금 코드에서 이미 정해진 것
 
+이 절은 라운드 1 시점의 코드 기준이다. 라운드 2 에서 `deduct` 가 `decreaseQuantity` 직후 flush 하도록 바뀌어
+UPDATE 시점과 충돌이 나는 위치가 달라졌다. 달라진 내용은 [9절](#9-라운드-2--fk-데드락과-flush-순서) 에 있다.
+
 - `StoresItems` 에 `@Version Long version` 이 있고, `OptimisticLockStockDeduction.deduct` 는 엔티티를 읽어
   `decreaseQuantity` 만 호출한다. UPDATE 는 감싸는 트랜잭션의 커밋 시점에 더티 체킹으로 나간다
 - `OrderService.create` 가 `@Transactional` 이고, 그 안에서 `stock.deduct` → `orders.save` 순서로 실행된다.
@@ -203,8 +206,8 @@ ieum:
 `ResponseEntity<ProblemDetail>` 을 돌려준다.
 
 ```java
-@ExceptionHandler(OptimisticLockingFailureException.class)
-public ResponseEntity<ProblemDetail> optimisticLockExhausted(OptimisticLockingFailureException e) {
+@ExceptionHandler({OptimisticLockingFailureException.class, CannotAcquireLockException.class})
+public ResponseEntity<ProblemDetail> contentionExhausted(ConcurrencyFailureException e) {
     ProblemDetail problem = ProblemDetail.forStatusAndDetail(
             HttpStatus.SERVICE_UNAVAILABLE, "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");
     return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -269,6 +272,7 @@ management:
 | `order.create.attempts{outcome=success}` | `order_create_attempts_total{outcome="success"}` | 최종 성공 요청 수 (= 201 건수) |
 | `order.create.attempts{outcome=conflict}` | `..._total{outcome="conflict"}` | 충돌한 시도 수 (요청당 여러 번) |
 | `order.create.attempts{outcome=exhausted}` | `..._total{outcome="exhausted"}` | 상한 소진 요청 수 (= 503 건수) |
+| `order.create.attempts{outcome=deadlock}` | `..._total{outcome="deadlock"}` | 데드락 희생으로 재시도한 시도 수 (라운드 2 부터. flush 적용 후 0 이어야 함) |
 | `order.create.attempts.used` | `order_create_attempts_used_bucket{le="1|2|3"}` | 성공까지 걸린 시도 횟수 분포 |
 | `hikaricp.connections.pending` | `hikaricp_connections_pending{pool="IeumHikariPool"}` | 커넥션 대기 스레드 수 (게이지) |
 | `hikaricp.connections.acquire` | `hikaricp_connections_acquire_seconds_{count,sum,max}` | 커넥션 획득 시간 (누적) |
@@ -411,8 +415,15 @@ SELECT MAX(id) - COUNT(*) AS rolled_back_inserts FROM users_orders;
   중간에 `flush()` 를 명시적으로 호출하는 경로가 생기면 `OptimisticLockingFailureException` 계열의 다른 하위 타입이
   나올 수 있으므로 부모를 잡는다
 - **`OptimisticLockStockDeduction.deduct` 의 `@Transactional` 은 REQUIRED** 라 `create` 의 트랜잭션에 참여한다.
-  전략 메서드 안에서 예외가 나지 않는 것이 정상이며, 충돌은 항상 `create` 프록시 밖에서 난다.
+  라운드 1 에서는 충돌이 항상 `create` 프록시 밖(커밋)에서 났고, 라운드 2 부터는 `deduct` 안의 `items.flush()` 에서 난다.
+  어느 쪽이든 예외는 두 프록시를 지나 재시도 빈까지 그대로 전파되므로 재시도 빈의 catch 절은 바뀌지 않는다.
   단위 테스트에서 전략을 직접 호출해 충돌을 재현하려 하지 말 것
+- **MySQL 데드락(1213)은 Hibernate 경로에서 `CannotAcquireLockException` 으로 나온다.** JDBC 템플릿 경로의
+  `DeadlockLoserDataAccessException` 이 아니다. Hibernate 다이얼렉트가 1213 을 `LockAcquisitionException` 으로 바꾸고
+  `HibernateJpaDialect` 가 그것을 `CannotAcquireLockException` 으로 번역한다. 검색으로 찾은 예제와 타입이 다르니 라운드 1 로그의 타입을 믿는다
+- **`ConcurrencyFailureException` 을 통째로 잡지 않는다.** 락 대기 타임아웃(1205, `PessimisticLockingFailureException`)까지
+  딸려온다. 50초를 기다린 뒤 다시 50초를 기다리는 것은 재시도가 아니라 장애 연장이다. 데드락은 감지가 즉시라 재시도가 맞고,
+  타임아웃은 그대로 올려 보낸다. `OrderCreateRetrierTest` 의 락 대기 타임아웃 케이스가 이 경계를 고정한다
 - **`InsufficientStock` 은 stale 값으로 판정될 수 있다.** remaining 1 을 읽은 두 스레드 중 하나는 충돌, 다른 하나는
   성공. 충돌한 쪽은 재시도에서 0 을 읽고 409. 이 순서가 맞다. 재시도에서 `InsufficientStock` 이 나오면 즉시 끝나야 한다
 - **Prometheus 엔드포인트가 401 이면** permitAll 줄을 빠뜨린 것. `management.endpoints.web.exposure.include` 를
@@ -440,3 +451,90 @@ SELECT MAX(id) - COUNT(*) AS rolled_back_inserts FROM users_orders;
 6. `test: add OrderCreateRetrierTest`
 7. `test: count 503 contention responses in k6 create-order scenario`
 8. `docs: record stage 2 optimistic lock load test results` / ADR / todo
+
+---
+
+## 9. 라운드 2 — FK 데드락과 flush 순서
+
+라운드 1 에서 19% (1,926건) 가 MySQL 데드락으로 500 을 받았다. 원인은 `@Version` 이 아니라 SQL 순서다.
+
+### 9.1 라운드 1 의 SQL 순서
+
+| 순서 | 코드 | SQL | 락 |
+|---|---|---|---|
+| 1 | `accounts.findByUid` | `SELECT users_account` | 없음 (MVCC) |
+| 2 | `items.findByUid` + `getStore()` | `SELECT stores_items`, `SELECT stores` | 없음 |
+| 3 | `existsByAccountAndItemInStates` | `SELECT users_orders` | 없음 |
+| 4 | `deduct` 의 `findById` | 없음 (1차 캐시) | |
+| 5 | `decreaseQuantity` | 없음 (더티 상태) | |
+| 6 | `orders.save` | `INSERT users_orders` | FK 검사로 `stores_items` 행 **S 락** |
+| 7 | 커밋 직전 flush | `UPDATE stores_items ... WHERE version = ?` | `stores_items` 행 **X 락** 요청 |
+
+두 트랜잭션이 6 까지 와서 각자 S 락을 쥐면 7 에서 서로의 S 락 때문에 X 락을 못 받는다. Hibernate 의 ActionQueue 는
+한 번의 flush 안에서도 INSERT 를 UPDATE 보다 먼저 실행하므로, flush 시점을 옮기지 않고는 순서를 바꿀 수 없다.
+naive 가 데드락이 없었던 것은 벌크 UPDATE 를 `deduct` 안에서 즉시 실행해 순서가 `UPDATE → INSERT` 였기 때문이다.
+
+### 9.2 변경 — `decreaseQuantity` 직후 `items.flush()`
+
+```java
+item.decreaseQuantity(quantity);
+items.flush();
+```
+
+- 순서가 `UPDATE`(X 락) → `INSERT`(S 락, 같은 트랜잭션이라 즉시 허용) → 커밋이 된다
+- **`EntityManager.flush()` 를 직접 쓰지 않는다.** 리포지토리 프록시를 거쳐야 `StaleObjectStateException` 이
+  `ObjectOptimisticLockingFailureException` 으로 번역된다. `EntityManager` 를 주입해 flush 하면 jakarta
+  `OptimisticLockException` 이 번역 없이 올라가 재시도 빈이 잡지 못하고 500 이 된다
+- `restore` 는 손대지 않는다. 취소 경로는 UPDATE 두 개뿐이고 FK 컬럼을 바꾸지 않아 S 락이 없다
+- `@Transactional` 은 REQUIRED 그대로. REQUIRES_NEW 로 바꾸면 UPDATE 가 먼저 커밋되어 INSERT 실패 시 보상이 필요하다
+
+flush 시점에 version 검사를 통과한 트랜잭션은 커밋까지 X 락을 쥔다. 낙관적 락의 검증 시점이 커밋에서 flush 로 당겨지고,
+flush 부터 커밋까지 짧은 구간은 비관적으로 동작한다. 나중 트랜잭션은 X 락에서 대기하다 커밋 후 `WHERE version = ?` 가
+0건이 되어 실패하고, 재시도에서 재고를 다시 읽는다. lost update 경로는 없다.
+
+### 9.3 데드락 희생자도 재시도 — `CannotAcquireLockException`
+
+flush 로 원인은 사라져야 하지만 방어선으로 잡고, 카운터 `outcome=deadlock` 으로 재발 여부를 지표로 남긴다.
+
+```java
+} catch (OptimisticLockingFailureException | CannotAcquireLockException e) {
+    (e instanceof CannotAcquireLockException ? deadlock : conflict).increment();
+    if (attempt >= retry.maxAttempts()) {
+        exhausted.increment();
+        throw e;
+    }
+    backoff(attempt);
+}
+```
+
+- 카운터는 생성자에서 미리 등록한다. 등록만 된 카운터도 Prometheus 에 0 으로 노출되므로 "없었다" 와 "안 쟀다" 가 구분된다
+- `exhausted` 는 하나로 둔다 (= 503 건수). 원인은 `conflict` / `deadlock` 합계로 읽는다
+- 백오프는 같은 것을 쓴다. 데드락 감지는 즉시지만 지터의 목적은 동시에 죽은 요청을 흩는 것이다
+- `ApiExceptionAdvice` 의 503 핸들러는 두 클래스를 명시하고 파라미터를 공통 부모 `ConcurrencyFailureException` 으로 받는다.
+  빠뜨리면 상한까지 데드락으로 끝난 요청이 여전히 500 이다
+
+### 9.4 검증
+
+- SQL 순서: `SQL_LOG_LEVEL=debug` 로 예약 1건을 보내 `update stores_items` 가 `insert into users_orders` 보다 앞에 찍히는지 본다. 확인 후 `warn` 으로 되돌린다
+- 데드락 소멸: 라운드 2 뒤 `SHOW ENGINE INNODB STATUS` 의 `LATEST DETECTED DEADLOCK` 시각이 라운드 1 (09-14 23:14 부근) 이면 이번 라운드에는 없었다는 뜻
+- 단위 테스트: `OrderCreateRetrierTest` 에 데드락 후 성공 / 상한까지 데드락 / 충돌·데드락 혼합 / 락 대기 타임아웃 미재시도
+
+### 9.5 라운드 2 에서 읽는 법
+
+| 결과 | 해석 |
+|---|---|
+| `deadlock` 0, 500 0 | flush 가 원인을 제거했고 9.3 은 방어선으로만 존재. 기대하는 결과 |
+| `deadlock` > 0, 500 0 | 방어선은 작동하지만 순서 문제가 남음. SQL 로그로 UPDATE 가 INSERT 앞인지 다시 확인 |
+| 500 > 0 | advice 변경 누락이거나 다른 예외. API 로그의 예외 타입부터 확인 |
+
+데드락으로 죽던 트랜잭션이 이제 `@Version` 검사까지 가므로 `conflict` 와 503 은 라운드 1 보다 늘 수 있다.
+그 503 이 "재고가 있는데 답을 못 준 요청" 의 진짜 값이다.
+
+### 9.6 검토했지만 택하지 않은 대안
+
+| 대안 | 왜 아닌가 |
+|---|---|
+| `save` 와 `deduct` 순서 교체 | INSERT 가 어차피 먼저 나가므로 아무것도 바뀌지 않음 |
+| `@ForeignKey(NO_CONSTRAINT)` 로 FK 제약 제거 | S 락 자체가 사라지지만 참조 무결성을 DB 에서 잃음 |
+| `deduct` 를 REQUIRES_NEW 로 | UPDATE 가 먼저 커밋돼 순서는 해결되나 INSERT 실패 시 보상 필요. 문제를 옮길 뿐 |
+| `SELECT ... FOR UPDATE` 비관적 락 | 정상 동작하지만 2단계의 비교 대상이 아님. 3단계 이후 별도 데이터 포인트로나 고려 |

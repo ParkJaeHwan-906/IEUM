@@ -14,6 +14,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.time.Duration;
@@ -83,6 +85,77 @@ class OrderCreateRetrierTest {
     }
 
     @Test
+    void 데드락_후_성공하면_재시도하고_deadlock_을_센다() {
+        OrderCreateRetrier retrier = retrier(3);
+        given(orderService.create(user, request, null))
+                .willThrow(deadlock())
+                .willReturn(response);
+
+        OrderResponse result = retrier.create(user, request, null);
+
+        assertThat(result).isSameAs(response);
+        then(orderService).should(times(2)).create(user, request, null);
+        assertThat(count("success")).isEqualTo(1);
+        assertThat(count("deadlock")).isEqualTo(1);
+        assertThat(count("conflict")).isEqualTo(0);
+        assertThat(count("exhausted")).isEqualTo(0);
+        assertThat(attemptsUsedMax()).isEqualTo(2);
+    }
+
+    @Test
+    void 상한까지_데드락이면_예외를_그대로_전파한다() {
+        OrderCreateRetrier retrier = retrier(3);
+        given(orderService.create(user, request, null))
+                .willThrow(deadlock())
+                .willThrow(deadlock())
+                .willThrow(deadlock());
+
+        assertThatThrownBy(() -> retrier.create(user, request, null))
+                .isInstanceOf(CannotAcquireLockException.class);
+
+        then(orderService).should(times(3)).create(user, request, null);
+        assertThat(count("success")).isEqualTo(0);
+        assertThat(count("deadlock")).isEqualTo(3);
+        assertThat(count("conflict")).isEqualTo(0);
+        assertThat(count("exhausted")).isEqualTo(1);
+        assertThat(attemptsUsedCount()).isEqualTo(0);
+    }
+
+    @Test
+    void 충돌과_데드락이_섞여도_각각_센다() {
+        OrderCreateRetrier retrier = retrier(3);
+        given(orderService.create(user, request, null))
+                .willThrow(conflict())
+                .willThrow(deadlock())
+                .willReturn(response);
+
+        OrderResponse result = retrier.create(user, request, null);
+
+        assertThat(result).isSameAs(response);
+        then(orderService).should(times(3)).create(user, request, null);
+        assertThat(count("success")).isEqualTo(1);
+        assertThat(count("conflict")).isEqualTo(1);
+        assertThat(count("deadlock")).isEqualTo(1);
+        assertThat(count("exhausted")).isEqualTo(0);
+        assertThat(attemptsUsedMax()).isEqualTo(3);
+    }
+
+    @Test
+    void 락_대기_타임아웃은_재시도_없이_즉시_전파한다() {
+        OrderCreateRetrier retrier = retrier(3);
+        PessimisticLockingFailureException timeout = new PessimisticLockingFailureException("lock wait timeout");
+        given(orderService.create(user, request, null)).willThrow(timeout);
+
+        assertThatThrownBy(() -> retrier.create(user, request, null)).isSameAs(timeout);
+
+        then(orderService).should(times(1)).create(user, request, null);
+        assertThat(count("success")).isEqualTo(0);
+        assertThat(count("conflict")).isEqualTo(0);
+        assertThat(count("deadlock")).isEqualTo(0);
+        assertThat(count("exhausted")).isEqualTo(0);
+    }
+
+    @Test
     void InsufficientStock_은_재시도_없이_즉시_전파한다() {
         OrderCreateRetrier retrier = retrier(3);
         given(orderService.create(user, request, null))
@@ -94,6 +167,7 @@ class OrderCreateRetrierTest {
         then(orderService).should(times(1)).create(user, request, null);
         assertThat(count("success")).isEqualTo(0);
         assertThat(count("conflict")).isEqualTo(0);
+        assertThat(count("deadlock")).isEqualTo(0);
         assertThat(count("exhausted")).isEqualTo(0);
     }
 
@@ -108,6 +182,7 @@ class OrderCreateRetrierTest {
         then(orderService).should(times(1)).create(user, request, null);
         assertThat(count("success")).isEqualTo(1);
         assertThat(count("conflict")).isEqualTo(0);
+        assertThat(count("deadlock")).isEqualTo(0);
         assertThat(attemptsUsedMax()).isEqualTo(1);
     }
 
@@ -132,6 +207,10 @@ class OrderCreateRetrierTest {
 
     private static ObjectOptimisticLockingFailureException conflict() {
         return new ObjectOptimisticLockingFailureException(StoresItems.class, 1L);
+    }
+
+    private static CannotAcquireLockException deadlock() {
+        return new CannotAcquireLockException("Deadlock found when trying to get lock; try restarting transaction");
     }
 
     private double count(String outcome) {
