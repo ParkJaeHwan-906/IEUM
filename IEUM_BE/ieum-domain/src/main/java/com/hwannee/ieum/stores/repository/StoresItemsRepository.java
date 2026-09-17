@@ -21,8 +21,21 @@ public interface StoresItemsRepository extends JpaRepository<StoresItems, Long> 
     @Query("update StoresItems s set s.remainingQuantity = :remaining where s.id = :id")
     int overwriteRemainingQuantity(@Param("id") Long id, @Param("remaining") int remaining);
 
-    // TODO(2.1 선택 단계, 조건부 UPDATE): 2단계와 3단계 사이의 중간 데이터 포인트
-    //   update StoresItems s set s.remainingQuantity = s.remainingQuantity - :qty
-    //   where s.id = :id and s.remainingQuantity >= :qty
-    //   반환값 0 이면 재고 부족. @Version 없이도 정합성이 맞고 재시도가 없다
+    @Modifying
+    @Query("""
+        update StoresItems s
+           set s.remainingQuantity = s.remainingQuantity - :quantity
+         where s.id = :id
+           and s.remainingQuantity >= :quantity
+        """)
+    int deductIfAvailable(@Param("id") Long id, @Param("quantity") int quantity);
+
+    @Modifying
+    @Query("""
+        update StoresItems s
+           set s.remainingQuantity = s.remainingQuantity + :quantity
+         where s.id = :id
+           and s.remainingQuantity + :quantity <= s.initialQuantity
+        """)
+    int restoreIfWithinInitial(@Param("id") Long id, @Param("quantity") int quantity);
 }
