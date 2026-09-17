@@ -1,5 +1,5 @@
 // 부하 테스트: 재고 100 인 상품 하나에 소비자 10,000 명이 동시에 1개씩 예약한다 (todo 2.1 동시성 비교의 공통 시나리오).
-// 세 전략(naive / optimistic / redis)을 STOCK_STRATEGY 만 바꿔 같은 스크립트로 돌리고 결과를 비교한다.
+// 네 전략(naive / optimistic / conditional / redis)을 STOCK_STRATEGY 만 바꿔 같은 스크립트로 돌리고 결과를 비교한다.
 //
 // 전제:  seed-loadtest.sql 로 소비자 CONSUMERS 명이 들어가 있고, ieum-auth(8081)·ieum-api(8080) 가 떠 있다.
 //        .env 에서 SQL_LOG_LEVEL=warn, SQL_BIND_LOG_LEVEL=off 로 두지 않으면 로그 출력이 병목이 되어 지연 수치가 왜곡된다.
@@ -11,7 +11,8 @@
 //   created 201   성공 건수. 정확히 100 이어야 정상. 1단계(naive)에서는 100 을 넘는 것(초과 예약)이 재현 목표
 //   sold out 409  재고 소진 이후의 정상 거절
 //   contention 503  재시도 상한(STOCK_RETRY_MAX_ATTEMPTS)까지 @Version 충돌만 겪고 답을 못 준 요청. optimistic 에서만 나오며,
-//                   재고가 남아 있는데도 거절된 건수라 2단계의 핵심 수치. naive·redis 에서 0 이 아니면 재시도 계층이 새는 것
+//                   재고가 남아 있는데도 거절된 건수라 2단계의 핵심 수치. naive·conditional·redis 에서 0 이 아니면 재시도 계층이 새는 것.
+//                   conditional 은 @Version 없이 조건부 UPDATE 로 차감하므로 충돌·재시도가 없고, 503 이 0 으로 찍히는 것 자체가 결과다
 //   http_req_duration{name:create-order}  예약 요청만의 지연. p(99) 를 기록한다
 //   http_req_failed  k6 는 4xx·5xx 를 전부 실패로 세므로 409·503 도 포함된다. 세 체크의 ✓ 합이 요청 수보다 작을 때만 오류(401/500). API 서버 로그 확인
 //   DB 불변식은 reset-loadtest.sql 상단 주석의 쿼리로 확인 (initial = remaining + 활성 주문 수량)
