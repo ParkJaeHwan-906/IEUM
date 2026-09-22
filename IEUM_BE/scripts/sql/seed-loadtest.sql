@@ -13,7 +13,10 @@
 --   상품   uid 33333333-3333-3333-3333-333333333333, initial_quantity 100
 --   소비자 email consumer{1..N}@loadtest.ieum / password1
 --
--- TODO(3단계 Redis): 시드 후 stock:{item_id} 키를 100 으로 SET 하는 단계 추가 (또는 API 서버 기동 시 워밍업)
+-- redis 전략일 때는 시드 뒤에 재고 키도 넣는다. 시드를 다시 돌리면 상품 행이 새 id 로 들어가므로 id 는 매번 확인하고 옛 키는 DEL 한다:
+--   docker exec -i ieum-mysql mysql -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE> -e "SELECT id FROM stores_items WHERE uid = '33333333-3333-3333-3333-333333333333'"
+--   docker exec ieum-redis redis-cli -a "<REDIS_PASSWORD>" --no-auth-warning SET stock:<item_id> 100
+--   키를 넣지 않아도 첫 예약이 워밍업 경로(DB 값으로 SET NX)로 채우지만, 그 DB 조회가 첫 요청 무리의 지연에 섞이므로 측정 전에는 직접 넣는다
 
 SET @consumers = 10000;
 SET @password_hash = '$2a$10$g.wCArFuHKZzC20xuWdkR.mkW.8Zzp9GCKGy4mR7UCQ.rGm0jLiDm';  -- BCrypt("password1")
