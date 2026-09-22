@@ -2,6 +2,7 @@ package com.hwannee.ieum.orders.service;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
 import com.hwannee.ieum.orders.config.OrderProperties;
+import com.hwannee.ieum.orders.stock.StockDeductionStrategy;
 import com.hwannee.ieum.orders.web.dto.CreateOrderRequest;
 import com.hwannee.ieum.orders.web.dto.OrderResponse;
 import io.micrometer.core.instrument.Counter;
@@ -19,6 +20,7 @@ import java.util.stream.IntStream;
 public class OrderCreateRetrier {
 
     private final OrderService orderService;
+    private final StockDeductionStrategy stock;
     private final OrderProperties.Retry retry;
     private final Counter success;
     private final Counter conflict;
@@ -26,8 +28,10 @@ public class OrderCreateRetrier {
     private final Counter deadlock;
     private final DistributionSummary attemptsUsed;
 
-    public OrderCreateRetrier(OrderService orderService, OrderProperties properties, MeterRegistry registry) {
+    public OrderCreateRetrier(OrderService orderService, StockDeductionStrategy stock, OrderProperties properties,
+                              MeterRegistry registry) {
         this.orderService = orderService;
+        this.stock = stock;
         this.retry = properties.retry();
         this.success = outcome(registry, "success");
         this.conflict = outcome(registry, "conflict");
@@ -41,7 +45,7 @@ public class OrderCreateRetrier {
     public OrderResponse create(AuthenticatedUser user, CreateOrderRequest request, String idempotencyKey) {
         for (int attempt = 1; ; attempt++) {
             try {
-                OrderResponse response = orderService.create(user, request, idempotencyKey);
+                OrderResponse response = stock.serialize(() -> orderService.create(user, request, idempotencyKey));
                 success.increment();
                 attemptsUsed.record(attempt);
                 return response;
