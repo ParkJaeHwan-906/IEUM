@@ -74,8 +74,10 @@ ieum:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
   stock:
-    # 재고 차감 전략: naive | optimistic | conditional | redis (TODO 2.1 의 비교)
+    # 재고 차감 전략: naive | optimistic | conditional | redis | synchronized (TODO 2.1 의 비교)
     strategy: ${STOCK_STRATEGY:naive}
+    # synchronized 전략의 락 범위. create(예약 생성 트랜잭션 전체, 정합성 성립) | deduct(차감 메서드만, 커밋 전에 풀려 초과 예약)
+    synchronized-scope: ${STOCK_SYNC_SCOPE:create}
   order:
     # READY_FOR_PICKUP 진입 후 이 시간이 지나면 EXPIRED, 재고 복구
     pickup-ttl: ${PICKUP_TTL:PT15M}
