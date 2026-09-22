@@ -214,7 +214,9 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 - [x] 부하 테스트 SQL 시드 — `IEUM_BE/scripts/sql/seed-loadtest.sql` (점주 1·가게 1·재고 100 상품 1·소비자 N, 기본 10,000 — 1인 1요청으로 "재고 100 / 요청 10,000" 을 맞춤. 소비자 1,000 이면 중복 활성 예약 검사가 요청 대부분을 걸러 재고 경합이 사라진다), `reset-loadtest.sql` (라운드 간 재고·주문 초기화). 실행은 호스트 mysql 이 아니라 `docker exec -i ieum-mysql mysql --default-character-set=utf8mb4` 파이프 (스크립트 상단 주석)
   - 고정 uid: 점주 `1111…`, 가게 `2222…`, 상품 `3333…`. 비밀번호는 전부 `password1`
   - 재실행 가능. 테이블은 서버를 한 번 기동해 Hibernate 가 만든 뒤여야 함
-- [ ] Redis Lua Script 기반 원자적 재고 차감
+- [ ] Redis Lua Script 기반 원자적 재고 차감 — 설계 결정·구현·측정 절차는 [3단계 가이드](./guides/stage3-redis-lua-guide.md)
+  - `stores_items.remaining_quantity` 는 예약 경로에서 읽지도 쓰지도 않는다 (X 락 직렬화가 돌아오므로). 원장은 `stock:{itemId}`, DB 열은 투영
+  - 차감은 즉시, 보상 INCRBY 는 `afterCompletion(STATUS_ROLLED_BACK)`, 복구 INCRBY 는 `afterCommit`. 남는 창 두 개(차감 후 커밋 전 / 커밋 후 INCRBY 전)는 Reconciliation 의 몫
 - [ ] Idempotency-Key 처리 (24시간 보존)
 - [x] 예약 생성 전제 조건 (2026-09-12) — 영업 종료·`lastOrderTime` 경과 시 `ItemNotOnSale`, 동일 사용자 + 동일 상품 활성 예약이 있으면 `DuplicateActiveOrder`. 재고 차감 전에 검사. `OrderServiceTest` 로 검증
   - DB 조회 기반이라 동시 요청 사이의 틈은 남아 있음. 3단계에서 중복 검사를 Lua 스크립트 안으로 옮겨 닫는다
