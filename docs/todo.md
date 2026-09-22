@@ -158,12 +158,13 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 - [x] 동시성 제어 방식 — 포트폴리오 목적으로 **세 단계를 모두 구현하고 같은 시나리오(재고 100 / 요청 10,000)로 비교 측정**한다
   1. 잠금 없음 — `remainingQuantity` 조회 후 차감. 초과 예약이 실제로 발생하는 것을 먼저 보인다
   2. `@Version` 낙관적 락 — `StoresItems.version` 충돌 시 `OptimisticLockException`. 재시도 정책과 함께. 정합성은 맞지만 실패율·재시도 폭주·DB 병목을 측정한다
-  3. Redis — Lua Script 로 원자적 차감 (README 설계). Redis 를 재고 원장으로 쓰고 DB 는 결과를 기록
+  3. Redis — Lua Script 로 원자적 차감 (README 설계). Redis 를 재고 원장으로 쓰고 DB 는 결과를 기록 (2026-09-23 두 라운드 측정 완료)
      - 분산락(SETNX/Redisson)은 채택하지 않음. 락 TTL·커밋 전 해제 문제가 있고 여전히 직렬화라 처리량 상한이 락 보유 시간에 묶임. 문서에 절충안으로만 한 줄 언급
      - 문제가 "동시성"에서 "Redis↔DB 정합성"으로 옮겨 감 → 2.2 의 재고 복구 멱등성·Expiry Worker·Reconciliation 이 그 답
   - [x] (선택) 2 와 3 사이에 조건부 UPDATE 한 문장(`SET remaining = remaining - ? WHERE id = ? AND remaining >= ?`) 을 중간 데이터 포인트로 추가. `@Version` 없이도 정합성이 맞고 재시도가 없어, 낙관적 락의 비용이 어디서 오는지 분리해 보여 줌 (2026-09-17 측정 완료)
   - 측정 항목: 최종 `remainingQuantity`, 성공 건수(정확히 100 이어야 함), p99 지연, DB 커넥션 대기, 재시도 횟수
-  - 각 단계는 프로파일 또는 전략 인터페이스로 갈아 끼울 수 있게 두고 결과를 [ADR-0003](./adr/0003-stock-deduction-concurrency.md) 에 남긴다 (2026-09-12 작성, 1단계까지 기록)
+  - [x] (비교) `synchronized` 두 범위 — `STOCK_STRATEGY=synchronized`, `STOCK_SYNC_SCOPE=create|deduct`. 트랜잭션 밖은 정합성 성립·처리량 1/3 (`active` 1), 트랜잭션 안은 201 이 2,854 (행 락 대기 = 성공 − 1). 전문은 [performance/2026-09-23-synchronized.md](./performance/2026-09-23-synchronized.md) (2026-09-23)
+  - 각 단계는 프로파일 또는 전략 인터페이스로 갈아 끼울 수 있게 두고 결과를 [ADR-0003](./adr/0003-stock-deduction-concurrency.md) 에 남긴다 (2026-09-12 작성, 2026-09-23 결정 확정: `redis` 채택, `conditional` 은 두 번째 답)
 
 ### 2.2 구현
 
@@ -214,9 +215,12 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 - [x] 부하 테스트 SQL 시드 — `IEUM_BE/scripts/sql/seed-loadtest.sql` (점주 1·가게 1·재고 100 상품 1·소비자 N, 기본 10,000 — 1인 1요청으로 "재고 100 / 요청 10,000" 을 맞춤. 소비자 1,000 이면 중복 활성 예약 검사가 요청 대부분을 걸러 재고 경합이 사라진다), `reset-loadtest.sql` (라운드 간 재고·주문 초기화). 실행은 호스트 mysql 이 아니라 `docker exec -i ieum-mysql mysql --default-character-set=utf8mb4` 파이프 (스크립트 상단 주석)
   - 고정 uid: 점주 `1111…`, 가게 `2222…`, 상품 `3333…`. 비밀번호는 전부 `password1`
   - 재실행 가능. 테이블은 서버를 한 번 기동해 Hibernate 가 만든 뒤여야 함
-- [ ] Redis Lua Script 기반 원자적 재고 차감 — 설계 결정·구현·측정 절차는 [3단계 가이드](./guides/stage3-redis-lua-guide.md)
+- [x] Redis Lua Script 기반 원자적 재고 차감 (2026-09-23) — 설계 결정·구현·측정 절차는 [3단계 가이드](./guides/stage3-redis-lua-guide.md). 결과: 201 정확히 100, 보상 0, **행 락 대기 0**, 재고 소진 0.40 / 0.69초, p99 808 / 589ms (두 라운드, 편차 큼). 전문은 [performance/2026-09-23-stage3-redis.md](./performance/2026-09-23-stage3-redis.md)
   - `stores_items.remaining_quantity` 는 예약 경로에서 읽지도 쓰지도 않는다 (X 락 직렬화가 돌아오므로). 원장은 `stock:{itemId}`, DB 열은 투영
   - 차감은 즉시, 보상 INCRBY 는 `afterCompletion(STATUS_ROLLED_BACK)`, 복구 INCRBY 는 `afterCommit`. 남는 창 두 개(차감 후 커밋 전 / 커밋 후 INCRBY 전)는 Reconciliation 의 몫
+  - [ ] Lua 판정과 사전 검사를 DB 트랜잭션 앞으로 — 지금은 `create` 가 `findByUid` 로 id 를 얻은 뒤 커넥션을 쥔 채 Redis 를 부른다. 소진 후 9,900 건이 커넥션 없이 409 로 끝나게 (다음 측정 1순위)
+  - [ ] Lettuce 풀링 — `commons-pool2` 가 없어 `lettuce.pool` 설정이 무시되고 네이티브 커넥션 1개 공유. 애플리케이션 측 스크립트 시간 평균 5ms (서버 20µs) 의 정체
+  - [ ] `redis` 전략에서 `GET /api/items/{itemUid}` 의 `remainingQuantity` 는 stale (DB 열은 투영) — 조회 경로가 Redis 를 볼지, Reconciliation 이 DB 열을 갱신할지 결정
 - [ ] Idempotency-Key 처리 (24시간 보존)
 - [x] 예약 생성 전제 조건 (2026-09-12) — 영업 종료·`lastOrderTime` 경과 시 `ItemNotOnSale`, 동일 사용자 + 동일 상품 활성 예약이 있으면 `DuplicateActiveOrder`. 재고 차감 전에 검사. `OrderServiceTest` 로 검증
   - DB 조회 기반이라 동시 요청 사이의 틈은 남아 있음. 3단계에서 중복 검사를 Lua 스크립트 안으로 옮겨 닫는다
@@ -224,8 +228,8 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 - [x] `UsersOrders` 에 `ready_at` 컬럼 추가 — `readyForPickup()` 호출 시 기록. 만료 판정 기준
 - [ ] TTL 기반 예약 만료 — `ready_at + 15분`. 시간은 설정값(`PICKUP_TTL`, 기본 `PT15M`)
 - [ ] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음) — `readyForPickup()` 시 `ZADD` (score = 만료 시각), 워커가 `ZRANGEBYSCORE` 로 지난 것을 꺼내 `expire()` + 재고 복구
-- [ ] 재고 복구 멱등성 (예약당 1회)
-- [ ] Reconciliation Job — 지연·누락 만료 탐지
+- [ ] 재고 복구 멱등성 (예약당 1회) — `restore` 시그니처에 `orderId` 를 더하고 `restored:{orderId}` SETNX 가드. Expiry Worker 와 함께 (취소 경로는 `afterCommit` 배치만으로 1회가 성립)
+- [ ] Reconciliation Job — 지연·누락 만료 탐지. **`redis` 전략에서는 필수**: `initial − 활성 주문 수량` 으로 Redis 값을 대조·수정하고 DB 투영을 갱신. 워밍업(`SET NX`) 이 DB 투영에서 값을 가져오므로 투영이 stale 이면 재기동 후 원장도 stale. 복구 상한 검사도 여기서
 - [ ] 픽업 코드 발급 및 검증
 
 ---
