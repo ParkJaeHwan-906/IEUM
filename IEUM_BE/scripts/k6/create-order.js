@@ -16,6 +16,7 @@
 //   http_req_duration{name:create-order}  예약 요청만의 지연. p(99) 를 기록한다
 //   http_req_failed  k6 는 4xx·5xx 를 전부 실패로 세므로 409·503 도 포함된다. 세 체크의 ✓ 합이 요청 수보다 작을 때만 오류(401/500). API 서버 로그 확인
 //   DB 불변식은 reset-loadtest.sql 상단 주석의 쿼리로 확인 (initial = remaining + 활성 주문 수량)
+//   redis 는 stores_items.remaining_quantity 를 건드리지 않으므로 remaining 자리에 GET stock:{item_id} 값을 넣어 확인한다
 
 import http from 'k6/http'
 import { check } from 'k6'
