@@ -1,6 +1,7 @@
 package com.hwannee.ieum.stores.service;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
+import com.hwannee.ieum.orders.stock.StockDeductionStrategy;
 import com.hwannee.ieum.stores.domain.Stores;
 import com.hwannee.ieum.stores.domain.StoresItems;
 import com.hwannee.ieum.stores.exception.StoreException;
@@ -20,11 +21,14 @@ public class StoreItemService {
     private final StoresItemsRepository items;
     private final StoresRepository stores;
     private final StoreService storeService;
+    private final StockDeductionStrategy stock;
 
-    public StoreItemService(StoresItemsRepository items, StoresRepository stores, StoreService storeService) {
+    public StoreItemService(StoresItemsRepository items, StoresRepository stores, StoreService storeService,
+                            StockDeductionStrategy stock) {
         this.items = items;
         this.stores = stores;
         this.storeService = storeService;
+        this.stock = stock;
     }
 
     @Transactional
@@ -39,8 +43,9 @@ public class StoreItemService {
         StoresItems item = new StoresItems(store, UUID.randomUUID().toString(), request.itemImgUrl(),
                 request.name(), request.originalPrice(), request.salePrice(),
                 request.initialQuantity(), request.lastOrderTime());
-        // TODO(3단계 Redis): 저장 직후 stock:{itemId} 를 initialQuantity 로 SET. DB 커밋 후에 실행되어야 함 (TransactionSynchronization)
-        return ItemResponse.from(items.save(item));
+        StoresItems saved = items.save(item);
+        stock.initialize(saved.getId(), saved.getInitialQuantity());
+        return ItemResponse.from(saved);
     }
 
     @Transactional(readOnly = true)
