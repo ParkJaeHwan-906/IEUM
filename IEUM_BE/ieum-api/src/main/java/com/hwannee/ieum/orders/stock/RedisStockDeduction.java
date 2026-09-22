@@ -20,7 +20,6 @@ import java.util.List;
 @ConditionalOnProperty(name = "ieum.stock.strategy", havingValue = "redis")
 public class RedisStockDeduction implements StockDeductionStrategy {
 
-    static final String KEY_PREFIX = "stock:";
     private static final long INSUFFICIENT = -1L;
     private static final long MISSING = -2L;
 
@@ -118,7 +117,7 @@ public class RedisStockDeduction implements StockDeductionStrategy {
     }
 
     private static String key(Long itemId) {
-        return KEY_PREFIX + itemId;
+        return StockKeys.stock(itemId);
     }
 
     private static Counter outcome(MeterRegistry registry, String outcome) {
