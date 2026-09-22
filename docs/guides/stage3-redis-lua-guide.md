@@ -371,7 +371,7 @@ class RedisStockDeductionIT {
         RedisStandaloneConfiguration conf = new RedisStandaloneConfiguration(
                 System.getenv().getOrDefault("REDIS_HOST", "localhost"),
                 Integer.parseInt(System.getenv().getOrDefault("REDIS_PORT", "6379")));
-        conf.setPassword(System.getenv("REDIS_PASSWORD"));
+        conf.setPassword(RedisPassword.of(System.getenv("REDIS_PASSWORD")));
         factory = new LettuceConnectionFactory(conf);
         factory.afterPropertiesSet();
         factory.start();
@@ -421,6 +421,8 @@ class RedisStockDeductionIT {
     }
 }
 ```
+
+`setPassword(String)` 에 `null` 을 넘기면 오버로드가 모호해 컴파일되지 않으므로 `RedisPassword.of` 로 감싼다 (`null` 이면 비밀번호 없음).
 
 실행 (Git Bash, `.env` 의 값으로):
 
