@@ -3,7 +3,9 @@ package com.hwannee.ieum.orders.service;
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
 import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.domain.UsersOrders;
+import com.hwannee.ieum.orders.config.OrderProperties;
 import com.hwannee.ieum.orders.exception.OrderException;
+import com.hwannee.ieum.orders.expiry.ExpiryIndex;
 import com.hwannee.ieum.orders.repository.UsersOrdersRepository;
 import com.hwannee.ieum.orders.stock.StockDeductionStrategy;
 import com.hwannee.ieum.orders.web.dto.CreateOrderRequest;
@@ -20,9 +22,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.Optional;
@@ -56,6 +60,12 @@ class OrderServiceTest {
 
     @Mock
     StockDeductionStrategy stock;
+
+    @Mock
+    ExpiryIndex expiryIndex;
+
+    @Spy
+    OrderProperties properties = new OrderProperties(Duration.ofMinutes(15), new OrderProperties.Retry(3, Duration.ofMillis(10)));
 
     @InjectMocks
     OrderService service;
