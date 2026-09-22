@@ -226,10 +226,20 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - DB 조회 기반이라 동시 요청 사이의 틈은 남아 있음. 3단계에서 중복 검사를 Lua 스크립트 안으로 옮겨 닫는다
 - [x] `OrderState.EXPIRED` 추가, `UsersOrders.expire()` 전이 — `READY_FOR_PICKUP` 에서만 허용. 그 외 상태에서 예외로 둘지 무시할지는 Expiry Worker 구현 시 결정
 - [x] `UsersOrders` 에 `ready_at` 컬럼 추가 — `readyForPickup()` 호출 시 기록. 만료 판정 기준
-- [ ] TTL 기반 예약 만료 — `ready_at + 15분`. 시간은 설정값(`PICKUP_TTL`, 기본 `PT15M`)
-- [ ] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음) — `readyForPickup()` 시 `ZADD` (score = 만료 시각), 워커가 `ZRANGEBYSCORE` 로 지난 것을 꺼내 `expire()` + 재고 복구
+- [~] TTL 기반 예약 만료 — `ready_at + PICKUP_TTL`. 뼈대 생성 (2026-09-23): `OrderService.readyForPickup` 이 `ExpiryIndex.register(orderId, readyAt + pickupTtl)`, `pickUp`·`cancel` 이 `remove`. 전부 `afterCommit` 에 등록 (커밋 전 ZADD 는 롤백된 주문을 인덱스에 남긴다)
+- [~] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음) — 뼈대 생성 (2026-09-23). `ieum-api` / `orders/expiry/`
+  - `ExpiryIndex` — `orders:expiry` ZSET, member = orderId, score = 만료 시각 epoch 초. `register`·`remove`(커밋 후)·`pollDue(now, limit)`
+  - `ExpiryWorker` — `@Scheduled(fixedDelay = EXPIRY_POLL_INTERVAL, 기본 PT5S)`. `OrderService.expire(orderId)` 호출 후 ZREM. `InvalidOrderState`·`OrderNotFound` 는 건너뛰고 ZREM, 그 외 예외는 인덱스에 남겨 다음 주기 재시도. 카운터 `order.expiry{outcome=expired|skipped|failed}`
+  - `OrderService.expire(orderId)` — `expire()` 전이 + `stock.restore`. `@EnableScheduling` 은 `OrderConfig`
+  - 단위 테스트 `ExpiryIndexTest` 5건, `ExpiryWorkerTest` 4건. 기동 확인: 워커·Job 이 스케줄대로 돌고 카운터 노출
+  - [ ] 다중 인스턴스에서 같은 id 를 두 워커가 꺼내는 문제 — `ZPOPMIN` 계열 또는 리더 선출 (V3)
+  - [ ] 만료 후 응답·알림 — 소비자에게 EXPIRED 를 어떻게 알릴지 (조회 시 상태만 / 푸시)
 - [ ] 재고 복구 멱등성 (예약당 1회) — `restore` 시그니처에 `orderId` 를 더하고 `restored:{orderId}` SETNX 가드. Expiry Worker 와 함께 (취소 경로는 `afterCommit` 배치만으로 1회가 성립)
-- [ ] Reconciliation Job — 지연·누락 만료 탐지. **`redis` 전략에서는 필수**: `initial − 활성 주문 수량` 으로 Redis 값을 대조·수정하고 DB 투영을 갱신. 워밍업(`SET NX`) 이 DB 투영에서 값을 가져오므로 투영이 stale 이면 재기동 후 원장도 stale. 복구 상한 검사도 여기서
+- [~] Reconciliation Job — **`redis` 전략에서는 필수**. 뼈대 생성 (2026-09-23): `orders/reconcile/StockReconciliationJob` (`STOCK_STRATEGY=redis` 일 때만, `RECONCILIATION_INTERVAL` 기본 PT60S). 상품마다 `기대값 = initial − 활성 수량 − 픽업 완료 수량` (`UsersOrdersRepository.sumQuantityByItemAndStates`) 을 `GET stock:{id}` 와 대조해 `stock.reconciliation{outcome=checked|mismatch|missing}` 카운터 + WARN. **탐지만 하고 정정은 아직 안 한다**
+  - [ ] 정정 정책 — 어긋나면 `SET stock:{id} 기대값`. 대조 사이에 들어온 Lua 차감과 경합하므로 "DB 스냅샷 이후의 차감" 을 어떻게 셀지 먼저 결정 (상품별 짧은 정지 플래그 / 차이가 임계 이상일 때만)
+  - [ ] DB 투영 갱신 — `stores_items.remaining_quantity = 기대값`. 워밍업(`SET NX`) 이 이 열에서 값을 가져오므로 투영이 stale 이면 재기동 후 원장도 stale
+  - [ ] 만료 누락 탐지 — `findReadyForPickupBefore(now − PICKUP_TTL)` 로 인덱스에서 빠진 후보를 찾아 `ExpiryIndex` 에 재등록
+  - [ ] 복구 상한 검사 — Redis 에 `initial` 이 없으므로 여기서 불변식으로 잡는다. 전체 상품 순회는 페이징
 - [ ] 픽업 코드 발급 및 검증
 
 ---
