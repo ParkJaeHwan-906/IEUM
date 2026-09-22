@@ -84,6 +84,12 @@ ieum:
     retry:
       max-attempts: ${STOCK_RETRY_MAX_ATTEMPTS:3}
       backoff: ${STOCK_RETRY_BACKOFF:PT0.01S}
+    expiry:
+      # ExpiryWorker 가 orders:expiry Sorted Set 을 훑는 주기
+      poll-interval: ${EXPIRY_POLL_INTERVAL:PT5S}
+    reconciliation:
+      # redis 전략에서 stock:{itemId} 를 DB 주문 상태로 대조하는 주기
+      interval: ${RECONCILIATION_INTERVAL:PT60S}
 
 logging:
   level:
