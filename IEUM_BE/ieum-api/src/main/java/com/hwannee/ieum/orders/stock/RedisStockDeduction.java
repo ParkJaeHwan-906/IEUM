@@ -1,33 +1,127 @@
 package com.hwannee.ieum.orders.stock;
 
+import com.hwannee.ieum.orders.exception.OrderException;
+import com.hwannee.ieum.stores.domain.StoresItems;
+import com.hwannee.ieum.stores.repository.StoresItemsRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-// 3단계: Redis 를 재고 원장으로 쓰고 Lua 스크립트 한 번으로 "확인 후 차감"을 원자적으로 끝낸다.
-// 분산락(SETNX/Redisson)은 채택하지 않는다. 락 TTL·커밋 전 해제 문제가 있고 여전히 직렬화라 처리량이 락 보유 시간에 묶인다.
-//
-// TODO(3단계 키 설계): stock:{itemId} = remaining. 상품 등록·재고 조정 시 DB 값으로 초기화(SET). 워밍업 전략 필요
-// TODO(3단계 Lua deduct):
-//   local remaining = tonumber(redis.call('GET', KEYS[1]))
-//   if remaining == nil then return -2 end                  -- 키 없음 → DB 에서 적재 후 재시도
-//   if remaining < tonumber(ARGV[1]) then return -1 end     -- 재고 부족
-//   return redis.call('DECRBY', KEYS[1], ARGV[1])
-//   RedisTemplate.execute(DefaultRedisScript<Long>) 로 실행. 스크립트는 resources/redis/*.lua 로 두고 SHA 캐시
-// TODO(3단계 Lua restore): 예약당 1회만 복구. restored:{orderId} 키를 SETNX 로 먼저 잡고 성공한 경우에만 INCRBY
-// TODO(3단계 정합성): Redis 차감 성공 후 DB 저장(UsersOrders)이 실패하면 보상 복구. 여기부터 문제가 "동시성"에서 "Redis↔DB 정합성"으로 옮겨 간다
-//   - 주기적으로 stock:{itemId} 와 SQL 불변식(initial = remaining + active + pickedUp) 을 대조하는 Reconciliation Job
-//   - 어긋남 건수를 지표로 노출 (README Reservation Correctness 대시보드)
+import java.util.List;
+
 @Component
 @ConditionalOnProperty(name = "ieum.stock.strategy", havingValue = "redis")
 public class RedisStockDeduction implements StockDeductionStrategy {
 
+    static final String KEY_PREFIX = "stock:";
+    private static final long INSUFFICIENT = -1L;
+    private static final long MISSING = -2L;
+
+    private final StringRedisTemplate redis;
+    private final StoresItemsRepository items;
+    private final RedisScript<Long> deductScript;
+    private final Counter success;
+    private final Counter insufficient;
+    private final Counter warmup;
+    private final Counter compensated;
+    private final Timer script;
+
+    public RedisStockDeduction(StringRedisTemplate redis, StoresItemsRepository items, MeterRegistry registry) {
+        this.redis = redis;
+        this.items = items;
+        this.deductScript = RedisScript.of(new ClassPathResource("redis/stock-deduct.lua"), Long.class);
+        this.success = outcome(registry, "success");
+        this.insufficient = outcome(registry, "insufficient");
+        this.warmup = outcome(registry, "warmup");
+        this.compensated = outcome(registry, "compensated");
+        this.script = Timer.builder("stock.redis.script").register(registry);
+    }
+
     @Override
     public void deduct(Long itemId, int quantity) {
-        throw new UnsupportedOperationException("3단계에서 구현");
+        String key = key(itemId);
+        long result = execute(key, quantity);
+        if(result == MISSING) {
+            warmup.increment();
+            warmUp(itemId, key);
+            result = execute(key, quantity);
+            if(result == MISSING) {
+                throw new IllegalStateException("재고 키를 적재하지 못했습니다: " + key);
+            }
+        }
+        if(result == INSUFFICIENT) {
+            insufficient.increment();
+            throw new OrderException.InsufficientStock();
+        }
+        success.increment();
+        onRollback(() -> {
+            redis.opsForValue().increment(key, quantity);
+            compensated.increment();
+        });
     }
 
     @Override
     public void restore(Long itemId, int quantity) {
-        throw new UnsupportedOperationException("3단계에서 구현");
+        afterCommit(() -> redis.opsForValue().increment(key(itemId), quantity));
+    }
+
+    @Override
+    public void initialize(Long itemId, int quantity) {
+        afterCommit(() -> redis.opsForValue().set(key(itemId), String.valueOf(quantity)));
+    }
+
+    private long execute(String key, int quantity) {
+        Long result = script.record(() -> redis.execute(deductScript, List.of(key), String.valueOf(quantity)));
+        if (result == null) {
+            throw new IllegalStateException("재고 스크립트가 결과를 돌려주지 않았습니다: " + key);
+        }
+        return result;
+    }
+
+    private void warmUp(Long itemId, String key) {
+        StoresItems item = items.findById(itemId).orElseThrow(OrderException.ItemNotFound::new);
+        redis.opsForValue().setIfAbsent(key, String.valueOf(item.getRemainingQuantity()));
+    }
+
+    private static void onRollback(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == STATUS_ROLLED_BACK) {
+                    action.run();
+                }
+            }
+        });
+    }
+
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
+    }
+
+    private static String key(Long itemId) {
+        return KEY_PREFIX + itemId;
+    }
+
+    private static Counter outcome(MeterRegistry registry, String outcome) {
+        return Counter.builder("stock.redis.deduct").tag("outcome", outcome).register(registry);
     }
 }
