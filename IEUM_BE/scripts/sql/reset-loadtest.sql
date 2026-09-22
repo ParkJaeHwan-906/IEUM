@@ -10,7 +10,9 @@
 --   SELECT MAX(id) - COUNT(*) AS rolled_back_inserts FROM users_orders;  -- 이 라운드에서 롤백된 주문 INSERT 수 (아래 AUTO_INCREMENT 초기화 덕분에 이전 라운드 몫이 섞이지 않음)
 --   불변식: initial = remaining + sum(active.quantity) + sum(PICKED_UP.quantity). 1단계에서는 이것이 깨지는 것이 정상(초과 예약)
 --
--- TODO(3단계 Redis): stock:{item_id} 키도 100 으로 되돌리는 단계 추가
+-- redis 전략일 때는 이 스크립트 뒤에 재고 키도 되돌린다 (item id 는 SELECT id FROM stores_items WHERE uid = @item_uid):
+--   docker exec ieum-redis redis-cli -a "<REDIS_PASSWORD>" --no-auth-warning SET stock:<item_id> 100
+--   docker exec ieum-redis redis-cli -a "<REDIS_PASSWORD>" --no-auth-warning CONFIG RESETSTAT   -- INFO commandstats 를 0 으로, 라운드의 evalsha 호출 수를 그대로 읽기 위해
 
 SET @item_uid = '33333333-3333-3333-3333-333333333333';
 
