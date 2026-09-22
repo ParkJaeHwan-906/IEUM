@@ -28,6 +28,14 @@ public interface UsersOrdersRepository extends JpaRepository<UsersOrders, Long> 
                                            @Param("itemId") Long itemId,
                                            @Param("states") Collection<OrderState> states);
 
+    @Query("""
+            select coalesce(sum(o.quantity), 0) from UsersOrders o
+            where o.storesItem.id = :itemId
+              and o.orderState in :states
+            """)
+    long sumQuantityByItemAndStates(@Param("itemId") Long itemId,
+                                    @Param("states") Collection<OrderState> states);
+
     // TODO(2.2 Reconciliation): Sorted Set 에서 누락된 만료 후보를 DB 기준으로 다시 찾는 용도
     @Query("""
             select o from UsersOrders o
