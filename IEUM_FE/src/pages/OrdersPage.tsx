@@ -4,13 +4,11 @@ import { cancelOrder, myOrders } from '../api/orders'
 import { messageOf } from '../api/errors'
 import { Empty, Skeleton, StateBadge, Toast, useAsync } from '../components/ui'
 import { activeStates, dateTime, won } from '../lib/format'
-import type { OrderResponse } from '../types/api'
+import type { OrderResponse, OrderState } from '../types/api'
 
 type Tab = 'active' | 'done'
 
-function pickupCode(orderId: number) {
-  return String((orderId * 7919) % 10000).padStart(4, '0')
-}
+const cancelableStates: OrderState[] = ['PENDING', 'APPROVED']
 
 export default function OrdersPage() {
   const [tab, setTab] = useState<Tab>('active')
@@ -70,23 +68,27 @@ export default function OrdersPage() {
               <span>
                 {won(order.orderPrice)} × {order.quantity}개 = <b>{won(order.orderPrice * order.quantity)}</b>
               </span>
-              {order.state === 'READY_FOR_PICKUP' && (
+              {order.state === 'READY_FOR_PICKUP' && order.pickupCode && (
                 <span>
-                  픽업 코드 <span className="pickup-code">{pickupCode(order.orderId)}</span>
+                  픽업 코드 <span className="pickup-code" style={{ fontSize: 22 }}>{order.pickupCode}</span>
                 </span>
               )}
-              {activeStates.includes(order.state) && (
+              {cancelableStates.includes(order.state) && (
                 <button type="button" className="btn btn--danger btn--sm" disabled={busy === order.orderId} onClick={() => cancel(order)}>
                   예약 취소
                 </button>
               )}
             </div>
-            {order.state === 'READY_FOR_PICKUP' && order.readyAt && (
+            {order.state === 'READY_FOR_PICKUP' && (
               <div className="alert alert--info">
-                {dateTime(order.readyAt)}부터 픽업 가능합니다. 15분 안에 방문하지 않으면 예약이 만료됩니다.
+                {order.readyAt ? `${dateTime(order.readyAt)}부터 ` : ''}픽업 가능합니다. 매장에서 픽업 코드를 알려 주세요. 15분 안에 픽업하지 않으면 예약이
+                만료되며, 이 단계에서는 취소할 수 없습니다.
               </div>
             )}
-            {order.state === 'PENDING' && <div className="alert alert--info">점주가 예약을 확인하는 중입니다.</div>}
+            {order.state === 'PENDING' && (
+              <div className="alert alert--info">점주가 예약을 확인하는 중입니다. 5분 안에 승인되지 않으면 자동 취소되고 재고가 복구됩니다.</div>
+            )}
+            {order.state === 'APPROVED' && <div className="alert alert--info">점주가 상품을 준비하고 있습니다. 준비가 끝나면 픽업 코드가 발급됩니다.</div>}
           </div>
         ))}
       </div>
