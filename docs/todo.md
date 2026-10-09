@@ -151,7 +151,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - 코드: `PENDING → APPROVED → READY_FOR_PICKUP → PICKED_UP`, 어디서든 `CANCELED`
   - [x] `EXPIRED` 위치 — **`READY_FOR_PICKUP` 진입 후 15분 미픽업** (2026-09-12 결정). 노쇼 방지와 빠른 회전이 목적이며 만료 시 재고를 복구한다
     - `lastOrderTime` 과는 무관. `PENDING` 과 `APPROVED` 에는 만료가 없고 점주의 승인·취소로만 빠져나간다
-    - [ ] 미승인 `PENDING` 이 방치되면 재고가 잠긴 채 남는다 — 점주 미응답 시 자동 취소를 둘지, 운영 알림으로 갈지 결정 필요
+    - [x] 미승인 `PENDING` 은 **5분 안에 다음 상태로 전이되지 않으면 자동 취소** (2026-10-09 결정·구현). `PendingTimeoutJob` 이 10초마다 `created_at <= now − APPROVAL_TIMEOUT` 인 PENDING 을 DB 에서 찾아 `CANCELED` + 재고 복구. 인덱스 `(order_state, created_at)`. [ADR-0004 8절](./adr/0004-reservation-path.md)
   - 재고 흐름: 예약 생성(`PENDING`) 시 차감 → `PICKED_UP` 이면 소진 확정 → `CANCELED`·`EXPIRED` 이면 복구. 복구는 주문당 정확히 1회
   - [x] README 의 상태 표를 코드에 맞게 수정 (`EXPIRED` 포함 6개 상태, 불변식의 필드명도 `initialQuantity`/`remainingQuantity` 로)
 - [x] 재고 필드 — `StoresItems.initialQuantity` / `remainingQuantity` (`initial_quantity` / `remaining_quantity`). `decreaseQuantity` / `increaseQuantity` 에 하한·상한 검사 있음
