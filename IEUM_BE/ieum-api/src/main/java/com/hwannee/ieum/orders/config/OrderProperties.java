@@ -10,7 +10,8 @@ public record OrderProperties(
         @DefaultValue("PT15M") Duration pickupTtl,
         @DefaultValue Retry retry,
         @DefaultValue Idempotency idempotency,
-        @DefaultValue("PT5S") Duration itemCacheTtl
+        @DefaultValue("PT5S") Duration itemCacheTtl,
+        @DefaultValue("PT5M") Duration approvalTimeout
 ) {
     public record Retry(
             @DefaultValue("3") int maxAttempts,
