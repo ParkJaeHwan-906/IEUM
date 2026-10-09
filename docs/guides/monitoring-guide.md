@@ -150,10 +150,10 @@ Prometheus 가 붙이는 `job` 라벨(`ieum-api` / `ieum-auth`) 로 서버를 �
 
 ---
 
-## 4. 후속 과제 — p99 를 보려면
+## 4. p99 패널과 남은 과제
 
-지금 `http_server_requests_seconds` 에는 히스토그램 버킷(`_bucket`) 이 없어서 평균과 최대만 볼 수 있다.
-k6 결과의 p99 와 같은 값을 Grafana 에서 보려면 `ieum-api` 의 `application.yaml` 에 다음을 추가한다.
+`ieum-api` 의 `application.yaml` 에 히스토그램 버킷을 켜 두었다 (2026-10-09). "응답 시간" 패널의 p99 시리즈가 이 버킷으로 계산된다.
+버킷 범위는 5ms ~ 30s 다. 부하 테스트에서 Tomcat 큐 대기를 포함한 지연이 수십 초까지 갔기 때문에 상한을 넉넉히 두었다.
 
 ```yaml
 management:
@@ -161,18 +161,17 @@ management:
     distribution:
       percentiles-histogram:
         http.server.requests: true
-      # 선택: 버킷 범위를 좁혀 시계열 수를 줄인다
       minimum-expected-value:
-        http.server.requests: 1ms
+        http.server.requests: 5ms
       maximum-expected-value:
-        http.server.requests: 5s
+        http.server.requests: 30s
 ```
 
-그다음 대시보드에 다음 패널을 추가한다.
+패널의 쿼리는 다음과 같다.
 
 ```promql
 histogram_quantile(0.99,
-  sum by (le) (rate(http_server_requests_seconds_bucket{job="ieum-api", uri="/api/orders", method="POST"}[$__rate_interval])))
+  sum by (le, status) (rate(http_server_requests_seconds_bucket{job="ieum-api", uri="/api/orders", method="POST"}[$__rate_interval])))
 ```
 
 `stock.redis.script` 와 HikariCP 획득 시간도 같은 방식(`percentiles-histogram.stock.redis.script: true` 등) 으로 켤 수 있다.
