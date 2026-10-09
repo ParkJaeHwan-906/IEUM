@@ -229,6 +229,24 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
         assertThat(ledgerRemaining(item)).isZero();
     }
 
+    @Test
+    void 남의_주문은_점주든_소비자든_없는_주문으로_보인다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser stranger = ownerOf(item(STOCK));
+        List<AuthenticatedUser> consumers = consumers(2);
+        OrderResponse created = creator.create(consumers.getFirst(), new CreateOrderRequest(item.getUid(), 1),
+                UUID.randomUUID().toString());
+
+        assertThatThrownBy(() -> orderService.approve(stranger, created.orderId()))
+                .isInstanceOf(OrderException.OrderNotFound.class);
+        assertThatThrownBy(() -> orderService.reject(stranger, created.orderId()))
+                .isInstanceOf(OrderException.OrderNotFound.class);
+        assertThatThrownBy(() -> orderService.cancel(consumers.getLast(), created.orderId()))
+                .isInstanceOf(OrderException.OrderNotFound.class);
+        assertThat(orders.findById(created.orderId()).orElseThrow().getOrderState()).isEqualTo(OrderState.PENDING);
+        assertThat(ledgerRemaining(item)).isEqualTo(STOCK - 1);
+    }
+
     Result send(AuthenticatedUser consumer, StoresItems item, String key) {
         try {
             creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), key);
