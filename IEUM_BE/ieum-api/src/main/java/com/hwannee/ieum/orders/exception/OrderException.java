@@ -56,12 +56,6 @@ public abstract class OrderException extends ApiException {
         }
     }
 
-    public static final class NotStoreOwner extends OrderException {
-        public NotStoreOwner() {
-            super(HttpStatus.FORBIDDEN, "해당 가게의 점주만 처리할 수 있습니다.");
-        }
-    }
-
     public static final class PickupCodeMismatch extends OrderException {
         public PickupCodeMismatch() {
             super(HttpStatus.BAD_REQUEST, "픽업 코드가 일치하지 않습니다.");
