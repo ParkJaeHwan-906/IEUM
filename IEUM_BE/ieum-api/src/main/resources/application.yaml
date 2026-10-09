@@ -81,6 +81,10 @@ ieum:
   order:
     # READY_FOR_PICKUP 진입 후 이 시간이 지나면 EXPIRED, 재고 복구
     pickup-ttl: ${PICKUP_TTL:PT15M}
+    # PENDING 이 이 시간 동안 승인되지 않으면 CANCELED, 재고 복구 (PendingTimeoutJob)
+    approval-timeout: ${APPROVAL_TIMEOUT:PT5M}
+    # PendingTimeoutJob 이 DB 에서 시간이 지난 PENDING 을 찾는 주기. 실제 취소 시점은 approval-timeout ~ approval-timeout + 이 값
+    approval-timeout-poll-interval: ${APPROVAL_TIMEOUT_POLL_INTERVAL:PT10S}
     retry:
       max-attempts: ${STOCK_RETRY_MAX_ATTEMPTS:3}
       backoff: ${STOCK_RETRY_BACKOFF:PT0.01S}
