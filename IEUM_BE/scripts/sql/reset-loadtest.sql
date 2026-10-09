@@ -9,9 +9,14 @@
 --   SELECT initial_quantity, remaining_quantity FROM stores_items WHERE uid = '33333333-3333-3333-3333-333333333333';
 --   SELECT MAX(id) - COUNT(*) AS rolled_back_inserts FROM users_orders;  -- 이 라운드에서 롤백된 주문 INSERT 수 (아래 AUTO_INCREMENT 초기화 덕분에 이전 라운드 몫이 섞이지 않음)
 --   불변식: initial = remaining + sum(active.quantity) + sum(PICKED_UP.quantity). 1단계에서는 이것이 깨지는 것이 정상(초과 예약)
+--   사용자당 활성 예약 2건 이상 (중복 예약의 틈. 0 이어야 함):
+--   SELECT COUNT(*) FROM (SELECT user_account_id FROM users_orders o JOIN stores_items i ON i.id = o.store_item_id
+--    WHERE i.uid = '33333333-3333-3333-3333-333333333333' AND o.order_state IN ('PENDING','APPROVED','READY_FOR_PICKUP')
+--    GROUP BY user_account_id HAVING COUNT(*) > 1) d;
 --
 -- redis 전략일 때는 이 스크립트 뒤에 재고 키도 되돌린다 (item id 는 SELECT id FROM stores_items WHERE uid = @item_uid):
---   docker exec ieum-redis redis-cli -a "<REDIS_PASSWORD>" --no-auth-warning SET stock:<item_id> 100
+--   docker exec ieum-redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --scan --pattern "stock:{<item_id>}*" | xargs -r redis-cli -a "$REDIS_PASSWORD" --no-auth-warning DEL'
+--   docker exec ieum-redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning SET "stock:{<item_id>}" <initial_quantity>'
 --   docker exec ieum-redis redis-cli -a "<REDIS_PASSWORD>" --no-auth-warning CONFIG RESETSTAT   -- INFO commandstats 를 0 으로, 라운드의 evalsha 호출 수를 그대로 읽기 위해
 
 SET @item_uid = '33333333-3333-3333-3333-333333333333';
