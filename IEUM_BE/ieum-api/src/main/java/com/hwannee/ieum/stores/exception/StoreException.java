@@ -33,6 +33,24 @@ public abstract class StoreException extends ApiException {
         }
     }
 
+    public static final class ActiveOrdersRemain extends StoreException {
+        public ActiveOrdersRemain() {
+            super(HttpStatus.CONFLICT, "진행 중인 예약이 있어 영업을 종료할 수 없습니다.");
+        }
+    }
+
+    public static final class QuantityBelowHeld extends StoreException {
+        public QuantityBelowHeld() {
+            super(HttpStatus.CONFLICT, "이미 예약된 수량보다 적게 줄일 수 없습니다.");
+        }
+    }
+
+    public static final class ItemSaleClosed extends StoreException {
+        public ItemSaleClosed() {
+            super(HttpStatus.CONFLICT, "이미 판매가 종료된 상품입니다.");
+        }
+    }
+
     public static final class InvalidPrice extends StoreException {
         public InvalidPrice() {
             super(HttpStatus.BAD_REQUEST, "할인가는 정가를 넘을 수 없습니다.");
