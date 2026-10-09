@@ -73,6 +73,7 @@ export interface OrderResponse {
   orderPrice: number
   state: OrderState
   readyAt?: string
+  pickupCode?: string
   createdAt: string
 }
 
@@ -96,4 +97,17 @@ export interface CreateItemRequest {
   initialQuantity: number
   lastOrderTime: string
   itemImgUrl?: string
+}
+
+export interface UpdateStoreHoursRequest {
+  openAt: string
+  closeAt: string
+}
+
+export interface UpdateItemQuantityRequest {
+  initialQuantity: number
+}
+
+export interface PickupRequest {
+  pickupCode: string
 }
