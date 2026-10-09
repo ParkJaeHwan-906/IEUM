@@ -1,7 +1,9 @@
 package com.hwannee.ieum.stores.repository;
 
 import com.hwannee.ieum.stores.domain.StoresItems;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -12,6 +14,14 @@ import java.util.Optional;
 public interface StoresItemsRepository extends JpaRepository<StoresItems, Long> {
 
     Optional<StoresItems> findByUid(String uid);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from StoresItems s where s.uid = :uid")
+    Optional<StoresItems> findByUidForUpdate(@Param("uid") String uid);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select s from StoresItems s where s.id = :id")
+    Optional<StoresItems> findByIdForUpdate(@Param("id") Long id);
 
     List<StoresItems> findAllByStore_UidOrderByIdDesc(String storeUid);
 
