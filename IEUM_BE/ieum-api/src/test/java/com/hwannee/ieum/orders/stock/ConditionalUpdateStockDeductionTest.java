@@ -1,5 +1,6 @@
 package com.hwannee.ieum.orders.stock;
 
+import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.exception.OrderException;
 import com.hwannee.ieum.stores.domain.StoreType;
 import com.hwannee.ieum.stores.domain.Stores;
@@ -86,14 +87,14 @@ class ConditionalUpdateStockDeductionTest {
     void 복구가_초기_수량_안이면_예외_없이_끝난다() {
         given(items.restoreIfWithinInitial(ITEM_ID, 1)).willReturn(1);
 
-        assertThatCode(() -> strategy.restore(ITEM_ID, 1)).doesNotThrowAnyException();
+        assertThatCode(() -> strategy.restore(order(1))).doesNotThrowAnyException();
     }
 
     @Test
     void 복구가_초기_수량을_넘기면_IllegalStateException() {
         given(items.restoreIfWithinInitial(ITEM_ID, 1)).willReturn(0);
 
-        assertThatThrownBy(() -> strategy.restore(ITEM_ID, 1))
+        assertThatThrownBy(() -> strategy.restore(order(1)))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -104,5 +105,10 @@ class ConditionalUpdateStockDeductionTest {
         ReflectionTestUtils.setField(item, "id", ITEM_ID);
         ReflectionTestUtils.setField(item, "remainingQuantity", remaining);
         return item;
+    }
+
+    private UsersOrders order(int quantity) {
+        UsersAccount consumer = new UsersAccount(null, UserType.CONSUMER, "consumer-uid", "consumer", "encoded");
+        return new UsersOrders(consumer, item(0), quantity, "key");
     }
 }
