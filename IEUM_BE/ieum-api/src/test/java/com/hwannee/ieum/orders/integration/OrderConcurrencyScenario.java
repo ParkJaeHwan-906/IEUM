@@ -4,6 +4,7 @@ import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
 import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.exception.OrderException;
+import com.hwannee.ieum.orders.expiry.PendingTimeoutJob;
 import com.hwannee.ieum.orders.repository.UsersOrdersRepository;
 import com.hwannee.ieum.orders.service.OrderCreator;
 import com.hwannee.ieum.orders.service.OrderService;
@@ -23,6 +24,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.ConcurrencyFailureException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -72,6 +75,15 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
 
     @Autowired
     UsersAccountRepository accounts;
+
+    @Autowired
+    PendingTimeoutJob pendingTimeoutJob;
+
+    @Autowired
+    TransactionTemplate transactions;
+
+    @Autowired
+    JdbcTemplate jdbc;
 
     abstract boolean closesDuplicateGap();
 
@@ -156,6 +168,27 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
         assertThat(ledgerRemaining(item)).isEqualTo(1);
         OrderResponse second = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
         assertThat(second.state()).isEqualTo(OrderState.PENDING);
+        assertThat(ledgerRemaining(item)).isZero();
+    }
+
+    @Test
+    void 승인되지_않은_채_제한_시간이_지나면_취소되고_재고가_돌아온다() {
+        StoresItems item = item(2);
+        AuthenticatedUser waiting = consumers(1).getFirst();
+        AuthenticatedUser approved = consumers(1).getFirst();
+        OrderResponse stale = creator.create(waiting, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+        OrderResponse accepted = creator.create(approved, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+        transactions.executeWithoutResult(status -> orders.findById(accepted.orderId()).orElseThrow().approve());
+        jdbc.update("update users_orders set created_at = ? where id in (?, ?)",
+                LocalDateTime.now().minusMinutes(6), stale.orderId(), accepted.orderId());
+
+        pendingTimeoutJob.run();
+
+        assertThat(orders.findById(stale.orderId()).orElseThrow().getOrderState()).isEqualTo(OrderState.CANCELED);
+        assertThat(orders.findById(accepted.orderId()).orElseThrow().getOrderState()).isEqualTo(OrderState.APPROVED);
+        assertThat(ledgerRemaining(item)).isEqualTo(1);
+        OrderResponse again = creator.create(waiting, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+        assertThat(again.state()).isEqualTo(OrderState.PENDING);
         assertThat(ledgerRemaining(item)).isZero();
     }
 
