@@ -7,6 +7,8 @@ import com.hwannee.ieum.stores.repository.StoresItemsRepository;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Duration;
@@ -47,6 +49,19 @@ public class ItemSaleCache {
         return entries.compute(itemUid, (uid, cached) ->
                 cached != null && cached.loadedAt().plus(ttl).isAfter(now) ? cached : new Entry(load(uid), now)
         ).sale();
+    }
+
+    public void evictAfterCommit(String itemUid) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            entries.remove(itemUid);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                entries.remove(itemUid);
+            }
+        });
     }
 
     private ItemSale load(String itemUid) {
