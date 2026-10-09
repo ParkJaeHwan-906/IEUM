@@ -51,6 +51,56 @@ services:
       timeout: 3s
       retries: 20
 
+  # --- 관측 (선택) ---------------------------------------------------------
+  # docker compose up -d 로는 뜨지 않는다. docker compose --profile monitoring up -d 로 함께 띄운다.
+  # 두 서버는 호스트에서 돌기 때문에 컨테이너에서는 host.docker.internal 로 긁는다.
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: ieum-prometheus
+    restart: unless-stopped
+    profiles: [ "monitoring" ]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    # Docker Desktop 은 기본 제공, Linux 에서는 이 줄이 있어야 호스트를 찾는다
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana-oss:12.1.0
+    container_name: ieum-grafana
+    restart: unless-stopped
+    profiles: [ "monitoring" ]
+    depends_on:
+      - prometheus
+    environment:
+      TZ: Asia/Seoul
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      # 로그인 없이 대시보드를 볼 수 있게 익명 Viewer 를 허용한다. 편집은 admin 으로
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/reservation-correctness.json
+    ports:
+      # 3000 은 FE 개발 서버가 쓴다
+      - "${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   mysql-data:
   redis-data:
+  prometheus-data:
+  grafana-data:
