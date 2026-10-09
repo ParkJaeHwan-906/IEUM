@@ -253,7 +253,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 - [ ] API 문서화 — OpenAPI vs Spring REST Docs
   - [x] 인증 API 명세는 우선 Notion 에 수기 작성 (이음 > API 명세서, 2026-09-10). 예약·상품 API 구현 시 이어서 추가
   - 코드 기반 문서 도구 도입 여부는 예약 도메인 착수 후 결정
-- [ ] `JPA_DDL_AUTO` 를 `validate` 로 전환하고 스키마 마이그레이션 도구 도입 검토 (Flyway)
+- [x] `JPA_DDL_AUTO` 를 `validate` 로 전환하고 Flyway 도입 (2026-10-09) — 마이그레이션은 `ieum-domain/src/main/resources/db/migration` (두 서버 공유). V1 기준선, V2 픽업 코드·미승인 조회 인덱스. 기존 DB 는 `baseline-on-migrate` 로 V1 을 건너뜀. Testcontainers 통합 테스트도 `validate` 로 돌려 마이그레이션과 엔티티 불일치를 잡음. [ADR-0005](./adr/0005-schema-migration.md)
 - [x] Testcontainers 기반 통합 테스트 (2026-10-09) — `ieum-api` / `orders/integration/`. MySQL 8.4 + Redis 7.4, 세 전략이 `OrderConcurrencyScenario` 상속, Docker 없으면 건너뜀
 
 ---
