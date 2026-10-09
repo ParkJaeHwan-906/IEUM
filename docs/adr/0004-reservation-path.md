@@ -97,15 +97,28 @@ DB 전략과 경로 자체가 다르므로 컨트롤러 앞단을 `OrderCreator`
 DB 전략은 트랜잭션 안에서 키로 먼저 조회해 있으면 그 주문을 돌려주고, 동시에 같은 키가 들어와 unique 위반이 나면 롤백 후 기존 주문을 돌려준다.
 같은 키를 다른 상품에 쓰면 409 `IdempotencyKeyReused`. 재요청 응답은 최초와 같은 201 과 같은 본문이다.
 
+### 8. 미승인 예약은 5분 뒤 자동 취소 — `PendingTimeoutJob`
+
+재고는 예약 생성(`PENDING`) 시점에 빠진다. 점주가 응답하지 않으면 재고가 잠긴 채 남아 다른 소비자가 살 수 없다.
+그래서 **`PENDING` 이 5분(`APPROVAL_TIMEOUT`) 안에 다음 상태로 전이되지 않으면 `CANCELED` 로 바꾸고 재고를 복구한다** (2026-10-09 결정).
+
+- **Redis 인덱스가 아니라 DB 조회.** 만료(`READY_FOR_PICKUP` 15분) 는 Sorted Set 인덱스를 썼지만, 미승인 판정은 `created_at` 만으로 되므로 DB 가 그대로 진실이다.
+  인덱스를 두면 등록 누락·유실을 다시 Reconciliation 으로 메워야 한다. 대신 `(order_state, created_at)` 인덱스를 두고 10초마다 100건씩 조회한다
+- **취소 시점은 5분 ~ 5분 10초.** 조회 주기(`APPROVAL_TIMEOUT_POLL_INTERVAL`) 만큼 늦을 수 있다
+- **승인과 겹치면 하나만 이긴다.** 상태 전이는 `UsersOrders.cancelUnapproved()` 가 `PENDING` 에서만 허용하고, 같은 행을 점주 승인이 먼저 바꾸면 `@Version` 충돌이나 상태 예외로 끝나 작업이 건너뛴다(`order.pending.timeout{outcome=skipped}`)
+- **재고 복구는 기존 경로 그대로.** `stock.restore(order)` 라 redis 전략에서도 주문당 1회 가드를 탄다. 취소된 사용자는 다시 예약할 수 있다(활성 사용자 SET 에서 빠짐)
+- 상태는 `EXPIRED` 가 아니라 `CANCELED`. `EXPIRED` 는 "준비됐는데 안 가져감" 이라는 소비자 책임의 의미로 남겨 둔다
+
 ## 검증
 
-- 단위 테스트: `OrderServiceTest`(13), `RedisStockDeductionTest`(8) 등 53건
+- 단위 테스트: `OrderServiceTest`(15), `RedisStockDeductionTest`(8), `PendingTimeoutJobTest`(4) 등 59건
 - **Testcontainers 통합 테스트** (`orders/integration/`, MySQL 8.4 + Redis 7.4, Docker 없으면 건너뜀): 세 전략이 같은 `OrderConcurrencyScenario` 를 상속
   - 사용자 40 명 × 10 회 동시 요청, 재고 25 — 초과 예약 없음, 원장 = 재고 − 성공 수. 비관적·redis 는 성공 정확히 25 건, 사용자당 1 건까지 단언
   - 같은 멱등키 8 개 동시 → 주문 1 건, 재고 1 회 차감, 이후 재요청은 같은 주문
   - 같은 키를 다른 상품에 → 거절, 두 번째 상품 재고 그대로
   - 취소 → 재고 복구 → 같은 사용자 재예약 가능
   - redis 전용: 복구 두 번 → 1 회만, 키 유실 → DB 주문 상태로 워밍업해 중복을 여전히 거절, 두 번 연속 같은 어긋남만 정정, 사이에 값이 바뀌면 정정 안 함
+  - 미승인 자동 취소: created_at 을 6분 전으로 돌린 PENDING 은 취소·재고 복구·재예약 가능, 같은 조건의 APPROVED 는 그대로 (세 전략 공통)
 - 부하 측정: 아래 "측정 결과"
 
 ## 측정 결과
