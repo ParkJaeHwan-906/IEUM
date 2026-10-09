@@ -1,5 +1,6 @@
 package com.hwannee.ieum.orders.stock;
 
+import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.exception.OrderException;
 import com.hwannee.ieum.stores.domain.StoresItems;
 import com.hwannee.ieum.stores.repository.StoresItemsRepository;
@@ -31,8 +32,8 @@ public class ConditionalUpdateStockDeduction implements StockDeductionStrategy {
 
     @Override
     @Transactional
-    public void restore(Long itemId, int quantity) {
-        if (items.restoreIfWithinInitial(itemId, quantity) == 0) {
+    public void restore(UsersOrders order) {
+        if (items.restoreIfWithinInitial(order.getStoresItem().getId(), order.getQuantity()) == 0) {
             throw new IllegalStateException("초기 수량을 초과할 수 없습니다.");
         }
     }
