@@ -133,6 +133,13 @@ public class OrderService {
         stock.restore(order);
     }
 
+    @Transactional
+    public void cancelUnapproved(Long orderId) {
+        UsersOrders order = orders.findById(orderId).orElseThrow(OrderException.OrderNotFound::new);
+        order.cancelUnapproved();
+        stock.restore(order);
+    }
+
     // TODO(2.2 점주 취소): 점주가 PENDING 을 거절하는 경로. cancel 과 같은 전이지만 소유권 검사가 다르다
 
     // TODO(1.5 소유권 규약): 같은 패턴이 StoresItems·ItemsReviews 에도 반복되므로 규약을 정한 뒤 공통 위치로 옮긴다.
