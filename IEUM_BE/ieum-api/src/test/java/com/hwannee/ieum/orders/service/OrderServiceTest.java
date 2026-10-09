@@ -235,7 +235,32 @@ class OrderServiceTest {
 
         assertThat(order.getOrderState()).isEqualTo(OrderState.CANCELED);
         then(stock).should().restore(order);
-        then(expiryIndex).should().remove(400L);
+    }
+
+    @Test
+    void 승인된_주문도_소비자가_취소할_수_있다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 410L);
+        order.approve();
+        given(orders.findByIdAndUsersAccount_Uid(410L, USER_UID)).willReturn(Optional.of(order));
+
+        service.cancel(user, 410L);
+
+        assertThat(order.getOrderState()).isEqualTo(OrderState.CANCELED);
+        then(stock).should().restore(order);
+    }
+
+    @Test
+    void 준비_완료된_주문은_소비자가_취소할_수_없다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 420L);
+        order.approve();
+        order.readyForPickup("123456");
+        given(orders.findByIdAndUsersAccount_Uid(420L, USER_UID)).willReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.cancel(user, 420L))
+                .isInstanceOf(InvalidOrderStateException.class);
+        assertThat(order.getOrderState()).isEqualTo(OrderState.READY_FOR_PICKUP);
+        then(stock).should(never()).restore(any());
+        then(expiryIndex).should(never()).remove(anyLong());
     }
 
     @Test
