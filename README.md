@@ -235,6 +235,8 @@ Prometheus가 애플리케이션과 인프라 지표를 수집하고 Grafana에�
 
 주요 사용자 ID와 예약 ID는 Metric Label로 사용하지 않고 구조화 로그를 통해 추적합니다.
 
+현재 구현된 것은 Reservation Correctness 대시보드입니다. `IEUM_BE`에서 `docker compose --profile monitoring up -d`를 실행하고 http://localhost:3001 에 접속하면 됩니다. 패널 설명과 PromQL은 [모니터링 가이드](./docs/guides/monitoring-guide.md)에 있습니다.
+
 ## Load Test Scenarios
 
 | Scenario | Purpose |
