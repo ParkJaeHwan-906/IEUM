@@ -4,9 +4,12 @@ import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
 import com.hwannee.ieum.auth.verify.principal.CurrentUser;
 import com.hwannee.ieum.orders.service.OrderService;
 import com.hwannee.ieum.orders.web.dto.OrderResponse;
+import com.hwannee.ieum.orders.web.dto.PickupRequest;
+import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -32,12 +35,16 @@ public class OwnerOrderController {
         return orderService.readyForPickup(owner, orderId);
     }
 
-    // TODO(2.2 픽업 코드): 요청 본문으로 픽업 코드를 받아 검증
     @PostMapping("/{orderId}/pickup")
-    public OrderResponse pickUp(@CurrentUser AuthenticatedUser owner, @PathVariable Long orderId) {
-        return orderService.pickUp(owner, orderId);
+    public OrderResponse pickUp(@CurrentUser AuthenticatedUser owner, @PathVariable Long orderId,
+                                @Valid @RequestBody PickupRequest request) {
+        return orderService.pickUp(owner, orderId, request.pickupCode());
     }
 
-    // TODO(2.2 점주 취소): POST /{orderId}/reject — PENDING 거절. 재고 복구 포함
+    @PostMapping("/{orderId}/reject")
+    public OrderResponse reject(@CurrentUser AuthenticatedUser owner, @PathVariable Long orderId) {
+        return orderService.reject(owner, orderId);
+    }
+
     // TODO(점주 기능): GET /api/owner/items/{itemUid}/orders — 상품별 예약 현황 (README Merchant 기능)
 }
