@@ -6,6 +6,10 @@ function at(hoursFromNow: number, minute = 0): string {
   return toLocalIso(d)
 }
 
+function minutesAgo(minutes: number): string {
+  return toLocalIso(new Date(Date.now() - minutes * 60 * 1000))
+}
+
 export function toLocalIso(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
@@ -23,7 +27,7 @@ export const seedStores: StoreResponse[] = [
 
 export const seedItems: ItemResponse[] = [
   { itemUid: 'it-croissant', storeUid: 'st-bakery-haneul', name: '버터 크루아상 3개입', originalPrice: 9000, salePrice: 4500, initialQuantity: 10, remainingQuantity: 4, lastOrderTime: at(3) },
-  { itemUid: 'it-sourdough', storeUid: 'st-bakery-haneul', name: '사워도우 식빵', originalPrice: 7500, salePrice: 3900, initialQuantity: 6, remainingQuantity: 6, lastOrderTime: at(2, 30) },
+  { itemUid: 'it-sourdough', storeUid: 'st-bakery-haneul', name: '사워도우 식빵', originalPrice: 7500, salePrice: 3900, initialQuantity: 6, remainingQuantity: 5, lastOrderTime: at(2, 30) },
   { itemUid: 'it-scone', storeUid: 'st-bakery-haneul', name: '플레인 스콘 4개입', originalPrice: 8000, salePrice: 3500, initialQuantity: 8, remainingQuantity: 0, lastOrderTime: at(1) },
   { itemUid: 'it-coldbrew', storeUid: 'st-cafe-moon', name: '콜드브루 원액 500ml', originalPrice: 12000, salePrice: 6900, initialQuantity: 12, remainingQuantity: 9, lastOrderTime: at(5) },
   { itemUid: 'it-tiramisu', storeUid: 'st-cafe-moon', name: '티라미수 조각', originalPrice: 6500, salePrice: 3200, initialQuantity: 5, remainingQuantity: 2, lastOrderTime: at(2) },
@@ -40,9 +44,9 @@ export const seedItems: ItemResponse[] = [
 ]
 
 export const seedOrders: OrderResponse[] = [
-  { orderId: 1001, itemUid: 'it-croissant', itemName: '버터 크루아상 3개입', quantity: 2, orderPrice: 4500, state: 'READY_FOR_PICKUP', readyAt: at(0, -5), createdAt: at(-1) },
-  { orderId: 1002, itemUid: 'it-banchan-set', itemName: '오늘의 반찬 5종 세트', quantity: 1, orderPrice: 8000, state: 'APPROVED', createdAt: at(-2) },
-  { orderId: 1003, itemUid: 'it-tomato', itemName: '완숙 토마토 2kg', quantity: 3, orderPrice: 5500, state: 'PENDING', createdAt: at(0, -20) },
+  { orderId: 1001, itemUid: 'it-croissant', itemName: '버터 크루아상 3개입', quantity: 2, orderPrice: 4500, state: 'READY_FOR_PICKUP', readyAt: minutesAgo(3), pickupCode: '482915', createdAt: minutesAgo(30) },
+  { orderId: 1002, itemUid: 'it-sourdough', itemName: '사워도우 식빵', quantity: 1, orderPrice: 3900, state: 'APPROVED', createdAt: minutesAgo(20) },
+  { orderId: 1003, itemUid: 'it-coldbrew', itemName: '콜드브루 원액 500ml', quantity: 3, orderPrice: 6900, state: 'PENDING', createdAt: minutesAgo(1) },
   { orderId: 1004, itemUid: 'it-tiramisu', itemName: '티라미수 조각', quantity: 1, orderPrice: 3200, state: 'PICKED_UP', readyAt: at(-26), createdAt: at(-27) },
   { orderId: 1005, itemUid: 'it-burger-set', itemName: '치즈버거 세트', quantity: 2, orderPrice: 4900, state: 'CANCELED', createdAt: at(-50) },
   { orderId: 1006, itemUid: 'it-scone', itemName: '플레인 스콘 4개입', quantity: 1, orderPrice: 3500, state: 'EXPIRED', readyAt: at(-75), createdAt: at(-76) },
