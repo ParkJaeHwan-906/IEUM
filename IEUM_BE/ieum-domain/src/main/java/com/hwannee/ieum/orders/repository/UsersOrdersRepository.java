@@ -22,7 +22,6 @@ public interface UsersOrdersRepository extends JpaRepository<UsersOrders, Long> 
 
     Optional<UsersOrders> findByUsersAccount_UidAndIdempotencyKey(String uid, String idempotencyKey);
 
-    // TODO(2.2 중복 예약): OrderService.create 에서 호출. 동시 요청 사이의 틈은 3단계 Lua 스크립트에서 닫는다
     @Query("""
             select count(o) > 0 from UsersOrders o
             where o.usersAccount.id = :accountId
@@ -57,7 +56,6 @@ public interface UsersOrdersRepository extends JpaRepository<UsersOrders, Long> 
             """)
     List<Long> findPendingIdsCreatedBefore(@Param("threshold") LocalDateTime threshold, Pageable pageable);
 
-    // TODO(2.2 Reconciliation): Sorted Set 에서 누락된 만료 후보를 DB 기준으로 다시 찾는 용도
     @Query("""
             select o from UsersOrders o
             where o.orderState = com.hwannee.ieum.orders.domain.OrderState.READY_FOR_PICKUP
