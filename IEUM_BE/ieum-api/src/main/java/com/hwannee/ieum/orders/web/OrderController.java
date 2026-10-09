@@ -47,7 +47,6 @@ public class OrderController {
         return orderService.findMine(user);
     }
 
-    // TODO(2.2 정책): READY_FOR_PICKUP 상태에서 소비자 취소를 허용할지. 현재는 활성 상태 전부 허용
     @PostMapping("/{orderId}/cancel")
     public OrderResponse cancel(@CurrentUser AuthenticatedUser user, @PathVariable Long orderId) {
         return orderService.cancel(user, orderId);
