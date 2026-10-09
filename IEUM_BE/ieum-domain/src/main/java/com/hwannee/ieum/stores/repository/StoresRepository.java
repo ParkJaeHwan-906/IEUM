@@ -10,6 +10,8 @@ public interface StoresRepository extends JpaRepository<Stores, Long> {
 
     Optional<Stores> findByUid(String uid);
 
+    Optional<Stores> findByUidAndUsersAccount_Uid(String uid, String ownerUid);
+
     List<Stores> findAllByUsersAccount_UidOrderByIdDesc(String ownerUid);
 
     // TODO(정책): 점주 1명당 가게 수 제한 여부. 제한하면 existsByUsersAccount_Id 로 검사
