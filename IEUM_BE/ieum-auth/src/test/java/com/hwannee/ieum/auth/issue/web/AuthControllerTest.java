@@ -170,4 +170,13 @@ class AuthControllerTest {
         mockMvc.perform(get("/admin/anything"))
                 .andExpect(status().isUnauthorized());
     }
+
+    @Test
+    void prometheusScrapeIsNotBlockedBySecurity() throws Exception {
+        mockMvc.perform(get("/actuator/prometheus"))
+                .andExpect(status().isNotFound());
+
+        mockMvc.perform(post("/actuator/prometheus"))
+                .andExpect(status().isUnauthorized());
+    }
 }
