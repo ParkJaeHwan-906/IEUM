@@ -35,8 +35,9 @@ IEUM(이음)은 동네 시장과 음식점이 영업 종료 전에 남은 신선
 
 ### Merchant
 
-- 가게 정보 등록 및 관리
+- 가게 정보 등록 및 관리, 영업 종료 (진행 중인 예약이 남아 있으면 거부)
 - 마감 상품, 사진, 가격, 수량 등록
+- 재고 수량 조정 (이미 예약된 수량 아래로는 줄일 수 없음)
 - 예약·픽업 가능 시간 설정
 - 상품별 예약 현황 조회
 - 픽업 코드 확인 및 수령 완료 처리
@@ -168,8 +169,7 @@ stateDiagram-v2
     APPROVED --> READY_FOR_PICKUP: 준비 완료 (readyAt 기록, 픽업 코드 발급)
     READY_FOR_PICKUP --> PICKED_UP: 픽업 코드 확인 후 픽업 완료
     PENDING --> CANCELED: 사용자 취소, 점주 거절, 5분 미승인 자동 취소. 재고 복구
-    APPROVED --> CANCELED: 취소 및 재고 복구
-    READY_FOR_PICKUP --> CANCELED: 취소 및 재고 복구
+    APPROVED --> CANCELED: 사용자 취소. 재고 복구
     READY_FOR_PICKUP --> EXPIRED: readyAt + 15분 미픽업, 재고 복구
     PICKED_UP --> [*]
     CANCELED --> [*]
@@ -182,12 +182,14 @@ stateDiagram-v2
 | APPROVED | 점주 승인 | 차감됨 |
 | READY_FOR_PICKUP | 준비 완료, 픽업 대기. 6자리 픽업 코드 발급, 이 시점부터 15분 카운트 | 차감됨 |
 | PICKED_UP | 픽업 완료 | 소진 확정 |
-| CANCELED | 사용자 취소, 점주 거절, 미승인 자동 취소 | 복구 |
+| CANCELED | 사용자 취소(PENDING·APPROVED 에서만), 점주 거절, 미승인 자동 취소 | 복구 |
 | EXPIRED | 준비 완료 후 15분 내 미픽업 (노쇼) | 복구 |
 
 PICKED_UP, CANCELED, EXPIRED는 최종 상태입니다. 같은 명령이 반복되더라도 상태와 재고를 추가로 변경하지 않으며, 재고 복구는 예약당 정확히 한 번만 일어납니다.
 
 EXPIRED는 노쇼를 막고 재고 회전을 빠르게 하기 위한 제약입니다. 만료 시각은 점주가 준비 완료 처리한 시점을 기준으로 하며, 상품의 `lastOrderTime`과는 무관합니다.
+
+소비자 취소는 APPROVED까지만 허용합니다. READY_FOR_PICKUP은 가게가 이미 상품을 준비한 상태이므로 소비자가 취소할 수 없고(409), 찾아가지 않으면 15분 뒤 EXPIRED가 되어 재고가 복구됩니다.
 
 PENDING은 점주가 5분(`APPROVAL_TIMEOUT`) 안에 승인하지 않으면 CANCELED로 바뀌고 재고가 복구됩니다. 점주가 응답하지 않아 재고가 잠기는 것을 막기 위한 제약이며, 노쇼가 아니라 가게 쪽 사유이므로 EXPIRED와 구분합니다. APPROVED에는 자동 만료가 없습니다.
 
@@ -232,6 +234,8 @@ Prometheus가 애플리케이션과 인프라 지표를 수집하고 Grafana에�
 - Load Test Comparison: V1/V2/V3 처리량, 지연, 오류율, 자원 사용량
 
 주요 사용자 ID와 예약 ID는 Metric Label로 사용하지 않고 구조화 로그를 통해 추적합니다.
+
+현재 구현된 것은 Reservation Correctness 대시보드입니다. `IEUM_BE`에서 `docker compose --profile monitoring up -d`를 실행하고 http://localhost:3001 에 접속하면 됩니다. 패널 설명과 PromQL은 [모니터링 가이드](./docs/guides/monitoring-guide.md)에 있습니다.
 
 ## Load Test Scenarios
 

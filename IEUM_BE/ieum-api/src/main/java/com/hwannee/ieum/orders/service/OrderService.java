@@ -94,11 +94,9 @@ public class OrderService {
 
     @Transactional
     public OrderResponse cancel(AuthenticatedUser user, Long orderId) {
-        UsersOrders order = orders.findByIdAndUsersAccount_Uid(orderId, user.uid())
-                .orElseThrow(OrderException.OrderNotFound::new);
+        UsersOrders order = ownedByConsumer(user, orderId);
         order.cancel();
         stock.restore(order);
-        expiryIndex.remove(order.getId());
         return OrderResponse.from(order);
     }
 
@@ -151,15 +149,14 @@ public class OrderService {
         stock.restore(order);
     }
 
-    // TODO(1.5 소유권 규약): 같은 패턴이 StoresItems·ItemsReviews 에도 반복되므로 규약을 정한 뒤 공통 위치로 옮긴다.
-    //   타인의 주문에 403 을 줄지 404 로 숨길지도 그때 결정. 소비자 쪽(cancel)은 404 로 숨기고 있다
+    private UsersOrders ownedByConsumer(AuthenticatedUser consumer, Long orderId) {
+        return orders.findByIdAndUsersAccount_Uid(orderId, consumer.uid())
+                .orElseThrow(OrderException.OrderNotFound::new);
+    }
+
     private UsersOrders ownedByStoreOwner(AuthenticatedUser owner, Long orderId) {
-        UsersOrders order = orders.findById(orderId).orElseThrow(OrderException.OrderNotFound::new);
-        String storeOwnerUid = order.getStoresItem().getStore().getUsersAccount().getUid();
-        if (!storeOwnerUid.equals(owner.uid())) {
-            throw new OrderException.NotStoreOwner();
-        }
-        return order;
+        return orders.findByIdAndStoreOwnerUid(orderId, owner.uid())
+                .orElseThrow(OrderException.OrderNotFound::new);
     }
 
     private static OrderResponse replayOf(UsersOrders previous, String itemUid) {

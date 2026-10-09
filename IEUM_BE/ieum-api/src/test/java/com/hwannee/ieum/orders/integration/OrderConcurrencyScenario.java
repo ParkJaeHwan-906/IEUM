@@ -1,6 +1,7 @@
 package com.hwannee.ieum.orders.integration;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
+import com.hwannee.ieum.orders.domain.InvalidOrderStateException;
 import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.exception.OrderException;
@@ -13,8 +14,12 @@ import com.hwannee.ieum.orders.web.dto.OrderResponse;
 import com.hwannee.ieum.stores.domain.StoreType;
 import com.hwannee.ieum.stores.domain.Stores;
 import com.hwannee.ieum.stores.domain.StoresItems;
+import com.hwannee.ieum.stores.exception.StoreException;
 import com.hwannee.ieum.stores.repository.StoresItemsRepository;
 import com.hwannee.ieum.stores.repository.StoresRepository;
+import com.hwannee.ieum.stores.service.StoreItemService;
+import com.hwannee.ieum.stores.service.StoreService;
+import com.hwannee.ieum.stores.web.dto.ItemResponse;
 import com.hwannee.ieum.users.domain.UserType;
 import com.hwannee.ieum.users.domain.Users;
 import com.hwannee.ieum.users.domain.UsersAccount;
@@ -79,6 +84,12 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
 
     @Autowired
     PendingTimeoutJob pendingTimeoutJob;
+
+    @Autowired
+    StoreService storeService;
+
+    @Autowired
+    StoreItemService storeItemService;
 
     @Autowired
     TransactionTemplate transactions;
@@ -229,6 +240,164 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
         assertThat(ledgerRemaining(item)).isZero();
     }
 
+    @Test
+    void 준비_완료된_주문은_소비자가_취소할_수_없고_재고도_그대로다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser owner = ownerOf(item);
+        AuthenticatedUser consumer = consumers(1).getFirst();
+        OrderResponse created = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+        orderService.approve(owner, created.orderId());
+        orderService.readyForPickup(owner, created.orderId());
+
+        assertThatThrownBy(() -> orderService.cancel(consumer, created.orderId()))
+                .isInstanceOf(InvalidOrderStateException.class);
+
+        assertThat(orders.findById(created.orderId()).orElseThrow().getOrderState())
+                .isEqualTo(OrderState.READY_FOR_PICKUP);
+        assertThat(ledgerRemaining(item)).isEqualTo(STOCK - 1);
+    }
+
+    @Test
+    void 승인된_주문은_소비자가_취소하면_재고가_돌아온다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser consumer = consumers(1).getFirst();
+        OrderResponse created = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+        orderService.approve(ownerOf(item), created.orderId());
+
+        assertThat(orderService.cancel(consumer, created.orderId()).state()).isEqualTo(OrderState.CANCELED);
+        assertThat(ledgerRemaining(item)).isEqualTo(STOCK);
+    }
+
+    @Test
+    void 남의_주문은_점주든_소비자든_없는_주문으로_보인다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser stranger = ownerOf(item(STOCK));
+        List<AuthenticatedUser> consumers = consumers(2);
+        OrderResponse created = creator.create(consumers.getFirst(), new CreateOrderRequest(item.getUid(), 1),
+                UUID.randomUUID().toString());
+
+        assertThatThrownBy(() -> orderService.approve(stranger, created.orderId()))
+                .isInstanceOf(OrderException.OrderNotFound.class);
+        assertThatThrownBy(() -> orderService.reject(stranger, created.orderId()))
+                .isInstanceOf(OrderException.OrderNotFound.class);
+        assertThatThrownBy(() -> orderService.cancel(consumers.getLast(), created.orderId()))
+                .isInstanceOf(OrderException.OrderNotFound.class);
+        assertThat(orders.findById(created.orderId()).orElseThrow().getOrderState()).isEqualTo(OrderState.PENDING);
+        assertThat(ledgerRemaining(item)).isEqualTo(STOCK - 1);
+    }
+
+    @Test
+    void 재고를_늘리면_늘린_만큼_바로_더_예약할_수_있다() {
+        StoresItems item = item(1);
+        AuthenticatedUser owner = ownerOf(item);
+        List<AuthenticatedUser> buyers = consumers(2);
+        assertThat(send(buyers.getFirst(), item, UUID.randomUUID().toString())).isEqualTo(Result.CREATED);
+        assertThat(send(buyers.getLast(), item, UUID.randomUUID().toString())).isEqualTo(Result.SOLD_OUT);
+
+        ItemResponse adjusted = storeItemService.adjustQuantity(owner, storeUidOf(item), item.getUid(), 2);
+
+        assertThat(adjusted.initialQuantity()).isEqualTo(2);
+        assertThat(ledgerRemaining(item)).isEqualTo(1);
+        assertThat(send(buyers.getLast(), item, UUID.randomUUID().toString())).isEqualTo(Result.CREATED);
+        assertThat(ledgerRemaining(item)).isZero();
+    }
+
+    @Test
+    void 잡힌_수량보다_적게_줄이면_거절하고_잡힌_수량까지는_줄일_수_있다() {
+        StoresItems item = item(3);
+        AuthenticatedUser owner = ownerOf(item);
+        List<AuthenticatedUser> buyers = consumers(3);
+        send(buyers.get(0), item, UUID.randomUUID().toString());
+        send(buyers.get(1), item, UUID.randomUUID().toString());
+
+        assertThatThrownBy(() -> storeItemService.adjustQuantity(owner, storeUidOf(item), item.getUid(), 1))
+                .isInstanceOf(StoreException.QuantityBelowHeld.class);
+        assertThat(ledgerRemaining(item)).isEqualTo(1);
+        assertThat(items.findById(item.getId()).orElseThrow().getInitialQuantity()).isEqualTo(3);
+
+        storeItemService.adjustQuantity(owner, storeUidOf(item), item.getUid(), 2);
+
+        assertThat(ledgerRemaining(item)).isZero();
+        assertThat(items.findById(item.getId()).orElseThrow().getInitialQuantity()).isEqualTo(2);
+        assertThat(send(buyers.get(2), item, UUID.randomUUID().toString())).isEqualTo(Result.SOLD_OUT);
+    }
+
+    @Test
+    void 예약과_재고_조정이_동시에_와도_초기_수량은_남은_수량과_잡힌_수량의_합이다() throws Exception {
+        StoresItems item = item(20);
+        AuthenticatedUser owner = ownerOf(item);
+        Map<Result, AtomicLong> results = new ConcurrentHashMap<>();
+        List<Runnable> tasks = new ArrayList<>();
+        for (AuthenticatedUser consumer : consumers(40)) {
+            tasks.add(() -> results.computeIfAbsent(
+                    send(consumer, item, UUID.randomUUID().toString()), r -> new AtomicLong()).incrementAndGet());
+        }
+        for (int target : new int[]{30, 22, 35, 25, 28}) {
+            tasks.add(tasks.size() / 2, () -> {
+                try {
+                    storeItemService.adjustQuantity(owner, storeUidOf(item), item.getUid(), target);
+                } catch (StoreException.QuantityBelowHeld ignored) {
+                }
+            });
+        }
+
+        runConcurrently(tasks);
+
+        int initial = items.findById(item.getId()).orElseThrow().getInitialQuantity();
+        long created = count(results, Result.CREATED);
+        long placed = orders.findAll().stream()
+                .filter(o -> o.getStoresItem().getId().equals(item.getId()))
+                .count();
+        assertThat(count(results, Result.ERROR)).isZero();
+        assertThat(placed).isEqualTo(created);
+        assertThat(created).isLessThanOrEqualTo(initial);
+        assertThat(ledgerRemaining(item)).isEqualTo(initial - created);
+    }
+
+    @Test
+    void 진행_중인_예약이_있으면_영업을_종료할_수_없고_끝나면_종료되어_예약이_막힌다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser owner = ownerOf(item);
+        AuthenticatedUser consumer = consumers(1).getFirst();
+        OrderResponse created = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+
+        assertThatThrownBy(() -> storeService.shutdown(owner, storeUidOf(item)))
+                .isInstanceOf(StoreException.ActiveOrdersRemain.class);
+        assertThat(send(consumers(1).getFirst(), item, UUID.randomUUID().toString())).isEqualTo(Result.CREATED);
+
+        orderService.reject(owner, created.orderId());
+        orders.findAll().stream()
+                .filter(o -> o.getStoresItem().getId().equals(item.getId()) && o.isActive())
+                .forEach(o -> orderService.reject(owner, o.getId()));
+        assertThat(storeService.shutdown(owner, storeUidOf(item)).shutdown()).isTrue();
+
+        assertThatThrownBy(() -> creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString()))
+                .isInstanceOf(OrderException.ItemNotOnSale.class);
+        assertThatThrownBy(() -> storeService.shutdown(owner, storeUidOf(item)))
+                .isInstanceOf(StoreException.StoreShutdown.class);
+        assertThat(ledgerRemaining(item)).isEqualTo(STOCK);
+    }
+
+    @Test
+    void 판매를_종료하면_곧바로_예약이_막히고_점주는_상품별_예약을_본다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser owner = ownerOf(item);
+        AuthenticatedUser consumer = consumers(1).getFirst();
+        OrderResponse created = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+
+        storeItemService.close(owner, storeUidOf(item), item.getUid());
+
+        assertThatThrownBy(() -> creator.create(consumers(1).getFirst(), new CreateOrderRequest(item.getUid(), 1),
+                UUID.randomUUID().toString())).isInstanceOf(OrderException.ItemNotOnSale.class);
+        assertThatThrownBy(() -> storeItemService.close(owner, storeUidOf(item), item.getUid()))
+                .isInstanceOf(StoreException.ItemSaleClosed.class);
+        List<OrderResponse> pending = storeItemService.findOrders(owner, storeUidOf(item), item.getUid(), OrderState.PENDING);
+        assertThat(pending).extracting(OrderResponse::orderId).containsExactly(created.orderId());
+        assertThat(storeItemService.findOrders(owner, storeUidOf(item), item.getUid(), OrderState.APPROVED)).isEmpty();
+        assertThatThrownBy(() -> storeItemService.findOrders(ownerOf(item(1)), storeUidOf(item), item.getUid(), null))
+                .isInstanceOf(StoreException.ItemNotFound.class);
+    }
+
     Result send(AuthenticatedUser consumer, StoresItems item, String key) {
         try {
             creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), key);
@@ -252,6 +421,10 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
                 LocalTime.of(0, 0), LocalTime.of(23, 59)));
         return items.save(new StoresItems(store, UUID.randomUUID().toString(), null, "빵", 5000, 3000, stock,
                 LocalDateTime.now().plusDays(1)));
+    }
+
+    static String storeUidOf(StoresItems item) {
+        return item.getStore().getUid();
     }
 
     AuthenticatedUser ownerOf(StoresItems item) {

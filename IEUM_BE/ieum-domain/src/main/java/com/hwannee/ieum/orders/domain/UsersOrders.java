@@ -92,7 +92,7 @@ public class UsersOrders extends BaseTimeEntity {
     }
 
     public void cancel() {
-        if (!orderState.isActive()) {
+        if (orderState != OrderState.PENDING && orderState != OrderState.APPROVED) {
             throw new InvalidOrderStateException(orderState, "취소");
         }
         this.orderState = OrderState.CANCELED;

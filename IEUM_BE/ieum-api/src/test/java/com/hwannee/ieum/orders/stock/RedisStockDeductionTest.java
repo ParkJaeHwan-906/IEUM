@@ -161,6 +161,89 @@ class RedisStockDeductionTest {
         assertThat(event("release_failed")).isEqualTo(1);
     }
 
+    @Test
+    void 줄이는_조정은_커밋_전에_Lua_로_판정하고_롤백되면_되돌린다() {
+        TransactionSynchronizationManager.initSynchronization();
+        StoresItems item = item(100);
+        givenAdjust("-20", "50");
+
+        assertThat(strategy.adjust(item, 80)).isTrue();
+
+        assertThat(item.getInitialQuantity()).isEqualTo(80);
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        then(redis).should(never()).execute(any(RedisScript.class), eq(List.of(StockKeys.stock(ITEM_ID))), eq("20"));
+        TransactionSynchronizationManager.getSynchronizations()
+                .forEach(s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+        then(redis).should().execute(any(RedisScript.class), eq(List.of(StockKeys.stock(ITEM_ID))), eq("20"));
+    }
+
+    @Test
+    void 잡힌_수량보다_줄이면_false_이고_상품은_그대로다() {
+        StoresItems item = item(100);
+        givenAdjust("-90", "BELOW_HELD");
+
+        assertThat(strategy.adjust(item, 10)).isFalse();
+
+        assertThat(item.getInitialQuantity()).isEqualTo(100);
+    }
+
+    @Test
+    void 줄일_때_키가_없으면_워밍업한_뒤_판정한다() {
+        StoresItems item = item(100);
+        givenAdjust("-20", "MISSING", "73");
+        given(items.findById(ITEM_ID)).willReturn(Optional.of(item));
+        given(orders.sumQuantityByItemAndStates(eq(ITEM_ID), anyCollection())).willReturn(7L);
+
+        assertThat(strategy.adjust(item, 80)).isTrue();
+
+        then(redis).should().execute(any(RedisScript.class),
+                eq(List.of(StockKeys.stock(ITEM_ID), StockKeys.active(ITEM_ID))), eq("93"));
+    }
+
+    @Test
+    void 늘리는_조정은_커밋_뒤에_Redis_에_반영한다() {
+        TransactionSynchronizationManager.initSynchronization();
+        StoresItems item = item(100);
+        given(redis.hasKey(StockKeys.stock(ITEM_ID))).willReturn(true);
+
+        assertThat(strategy.adjust(item, 130)).isTrue();
+
+        assertThat(item.getInitialQuantity()).isEqualTo(130);
+        then(redis).should(never()).execute(any(RedisScript.class), any(List.class), any());
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        then(redis).should().execute(any(RedisScript.class), eq(List.of(StockKeys.stock(ITEM_ID))), eq("30"));
+    }
+
+    @Test
+    void 늘릴_때_키가_없으면_커밋_전에_이전_초기_수량으로_워밍업한다() {
+        TransactionSynchronizationManager.initSynchronization();
+        StoresItems item = item(100);
+        given(redis.hasKey(StockKeys.stock(ITEM_ID))).willReturn(false);
+        given(items.findById(ITEM_ID)).willReturn(Optional.of(item));
+        given(orders.sumQuantityByItemAndStates(eq(ITEM_ID), anyCollection())).willReturn(7L);
+
+        assertThat(strategy.adjust(item, 130)).isTrue();
+
+        then(redis).should().execute(any(RedisScript.class),
+                eq(List.of(StockKeys.stock(ITEM_ID), StockKeys.active(ITEM_ID))), eq("93"));
+        assertThat(item.getInitialQuantity()).isEqualTo(130);
+    }
+
+    @Test
+    void 늘린_수량의_반영이_실패해도_예외_없이_카운터만_올린다() {
+        given(redis.hasKey(StockKeys.stock(ITEM_ID))).willReturn(true);
+        given(redis.execute(any(RedisScript.class), eq(List.of(StockKeys.stock(ITEM_ID))), eq("30")))
+                .willThrow(new RedisConnectionFailureException("down"));
+
+        assertThatCode(() -> strategy.adjust(item(100), 130)).doesNotThrowAnyException();
+        assertThat(event("adjust_failed")).isEqualTo(1);
+    }
+
+    private void givenAdjust(String delta, String first, String... rest) {
+        given(redis.execute(any(RedisScript.class), eq(List.of(StockKeys.stock(ITEM_ID))), eq(delta)))
+                .willReturn(first, (Object[]) rest);
+    }
+
     private void givenReserve(String first, String... rest) {
         given(redis.execute(any(RedisScript.class), eq(RESERVE_KEYS), eq("1"), eq(USER), eq("30")))
                 .willReturn(first, (Object[]) rest);

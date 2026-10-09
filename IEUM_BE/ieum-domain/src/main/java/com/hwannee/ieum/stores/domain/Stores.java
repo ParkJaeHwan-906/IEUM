@@ -60,6 +60,11 @@ public class Stores extends BaseTimeEntity {
         this.logoImgUrl = logoImgUrl;
     }
 
+    public void changeBusinessHours(LocalTime openAt, LocalTime closeAt) {
+        this.openAt = openAt;
+        this.closeAt = closeAt;
+    }
+
     public void shutdown() {
         this.shutdownAt = LocalDateTime.now();
     }

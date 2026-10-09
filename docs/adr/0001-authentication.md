@@ -143,6 +143,56 @@ com.hwannee.ieum.auth
 - 재배포 없이 정책을 바꿔야 하는 요구가 생길 때
 - 역할이나 권한 체계가 `hasRole` + 소유권 검사로 표현하기 어려울 만큼 복잡해질 때
 
+## 추가 결정 (2026-10-09) — 소유권 규약과 404
+
+"소유권 검사를 각자 작성하지 않도록 공통 규약을 세운다" 를 구체화한다.
+
+### 남의 리소스는 403 이 아니라 404
+
+**다른 사용자의 리소스에 접근하면 어디서든 404 를 준다.** 존재 자체를 숨긴다.
+
+- 403 은 "그 id 의 리소스가 있다" 를 알려 준다. 주문 id 는 내부 PK 라 순차적이어서, 403/404 차이만으로 다른 가게의 주문 수나 가게 uid 의 유효성을 셀 수 있다
+- 소비자 쪽(`cancel`) 은 처음부터 404 였고, 점주 쪽만 403(`NotStoreOwner`) 이었다. 같은 질문("내 것인가") 에 두 가지 답이 있을 이유가 없다
+- 그래서 `OrderException.NotStoreOwner`, `StoreException.NotStoreOwner` 를 없앴다. 남의 주문은 `OrderNotFound`, 남의 가게는 `StoreNotFound`, 남의 가게 상품은 `ItemNotFound`
+
+403 은 **역할** 이 맞지 않을 때만 쓴다. 역할은 토큰에 이미 드러나 있는 정보라 숨길 것이 없다.
+
+### 규약 — 소유자 uid 를 조회 조건에 넣는다
+
+"조회 후 비교" 가 아니라 **"소유자 조건을 포함한 조회 하나"** 로 한다. 없으면 NotFound.
+
+| 대상 | 메서드 | 조건 |
+|---|---|---|
+| 소비자 주문 | `OrderService.ownedByConsumer` → `findByIdAndUsersAccount_Uid` | `o.usersAccount.uid = 토큰 uid` |
+| 점주 주문 | `OrderService.ownedByStoreOwner` → `findByIdAndStoreOwnerUid` | `o.storesItem.store.usersAccount.uid = 토큰 uid` |
+| 가게 | `StoreService.ownedBy` → `findByUidAndUsersAccount_Uid` | `s.usersAccount.uid = 토큰 uid` |
+| 가게의 상품 | `StoreItemService.ownedItem` / `ownedItemForUpdate` → `findOwnedByUid` / `findOwnedByUidForUpdate` | `s.uid = 상품 uid and s.store.uid = 가게 uid and s.store.usersAccount.uid = 토큰 uid` |
+
+이렇게 하는 이유:
+
+- **"없음" 과 "남의 것" 이 코드에서도 구분되지 않는다.** 비교 분기가 없으니 403 으로 새는 실수가 구조적으로 생기지 않는다
+- **잠금 조회와 합칠 수 있다.** 재고 조정은 상품 행을 `FOR UPDATE` 로 잠가야 하는데, 먼저 일반 SELECT 로 소유권을 확인하고 다시 잠그면 영속성 컨텍스트가 처음 읽은 엔티티를 그대로 돌려줘 잠근 뒤의 값을 보지 못한다. 소유권 조건을 잠금 조회에 넣으면 트랜잭션의 첫 문장이 잠금 조회 하나로 끝난다 (ADR-0004 1절과 같은 이유)
+- **추가 비용이 없다.** 어차피 하던 조회에 조인 조건 하나가 붙는다
+
+새 서비스 메서드는 위 표의 메서드를 거치거나, 같은 모양(`…And<소유자 경로>Uid`) 의 조회를 새로 만든다. 엔티티를 id 로만 꺼낸 뒤 소유자를 비교하는 코드는 쓰지 않는다.
+시스템 작업(만료·미승인 자동 취소·Reconciliation) 은 사용자 요청이 아니므로 `findById` 를 그대로 쓴다.
+
+### 역할 검사
+
+| 컨트롤러 | 역할 |
+|---|---|
+| `OwnerStoreController` (`/api/owner/stores/**`) | 클래스 레벨 `hasRole('BUSINESS_OWNER')` |
+| `OwnerOrderController` (`/api/owner/orders/**`) | 클래스 레벨 `hasRole('BUSINESS_OWNER')` |
+| `OrderController` (`/api/orders/**`) | 클래스 레벨 `hasRole('CONSUMER')` — 생성만이 아니라 내 예약 조회·취소도 소비자 전용 |
+
+### 검증
+
+- `OrderServiceTest` — 다른 점주의 승인·준비·픽업·거절, 다른 소비자의 취소가 모두 `OrderNotFound` 이고 재고를 건드리지 않음
+- `StoreServiceTest` — 다른 점주의 가게는 조회·영업 시간 수정·영업 종료 모두 `StoreNotFound`
+- `StoreItemServiceTest` — 다른 점주의 가게에 상품 등록은 `StoreNotFound`, 다른 점주의 상품 재고 조정·판매 종료·예약 현황은 `ItemNotFound`
+- `RoleAccessTest` (`@WebMvcTest`, `JwtDecoder` 모킹, 실제 컨트롤러) — 소비자 토큰으로 점주 API(가게·상품·주문), 점주 토큰으로 소비자 API 를 부르면 403 이고 서비스는 호출되지 않음
+- 통합 테스트(`OrderConcurrencyScenario`, 세 전략) — 다른 점주의 승인·거절, 다른 소비자의 취소가 `OrderNotFound` 이고 주문 상태와 재고가 그대로
+
 ## 참고
 
 - 표준 용어에서 **Authorization Server 는 토큰을 발급하는 주체**를 가리킨다(OAuth2/OIDC).

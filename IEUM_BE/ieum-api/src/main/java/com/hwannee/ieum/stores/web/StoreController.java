@@ -24,6 +24,11 @@ public class StoreController {
         this.storeItemService = storeItemService;
     }
 
+    @GetMapping
+    public List<StoreResponse> stores() {
+        return storeService.findOpen();
+    }
+
     @GetMapping("/{storeUid}")
     public StoreResponse store(@PathVariable String storeUid) {
         return storeService.findByUid(storeUid);

@@ -34,6 +34,8 @@ public class RedisStockDeduction implements StockDeductionStrategy {
     private static final Logger log = LoggerFactory.getLogger(RedisStockDeduction.class);
     private static final String REPLAY_PREFIX = "REPLAY:";
     private static final String PENDING = "PENDING";
+    private static final String MISSING = "MISSING";
+    private static final String BELOW_HELD = "BELOW_HELD";
     private static final Duration RESTORED_MARKER_TTL = Duration.ofDays(1);
 
     public enum Outcome { RESERVED, REPLAY, IN_FLIGHT, DUPLICATE, SOLD_OUT }
@@ -49,12 +51,14 @@ public class RedisStockDeduction implements StockDeductionStrategy {
     private final RedisScript<Long> compensateScript;
     private final RedisScript<Long> releaseScript;
     private final RedisScript<Long> warmupScript;
+    private final RedisScript<String> adjustScript;
     private final Map<Outcome, Counter> reserved = new EnumMap<>(Outcome.class);
     private final Counter warmup;
     private final Counter compensated;
     private final Counter released;
     private final Counter releaseSkipped;
     private final Counter releaseFailed;
+    private final Counter adjustFailed;
     private final Timer script;
 
     public RedisStockDeduction(StringRedisTemplate redis, StoresItemsRepository items, UsersOrdersRepository orders,
@@ -67,6 +71,7 @@ public class RedisStockDeduction implements StockDeductionStrategy {
         this.compensateScript = RedisScript.of(new ClassPathResource("redis/stock-compensate.lua"), Long.class);
         this.releaseScript = RedisScript.of(new ClassPathResource("redis/stock-release.lua"), Long.class);
         this.warmupScript = RedisScript.of(new ClassPathResource("redis/stock-warmup.lua"), Long.class);
+        this.adjustScript = RedisScript.of(new ClassPathResource("redis/stock-adjust.lua"), String.class);
         for (Outcome outcome : Outcome.values()) {
             reserved.put(outcome, Counter.builder("stock.redis.reserve")
                     .tag("outcome", outcome.name().toLowerCase()).register(registry));
@@ -76,15 +81,16 @@ public class RedisStockDeduction implements StockDeductionStrategy {
         this.released = event(registry, "released");
         this.releaseSkipped = event(registry, "release_skipped");
         this.releaseFailed = event(registry, "release_failed");
+        this.adjustFailed = event(registry, "adjust_failed");
         this.script = Timer.builder("stock.redis.script").register(registry);
     }
 
     public Reservation reserve(Long itemId, String userUid, String idempotencyKey, int quantity) {
         String result = executeReserve(itemId, userUid, idempotencyKey, quantity);
-        if ("MISSING".equals(result)) {
+        if (MISSING.equals(result)) {
             warmUp(itemId);
             result = executeReserve(itemId, userUid, idempotencyKey, quantity);
-            if ("MISSING".equals(result)) {
+            if (MISSING.equals(result)) {
                 throw new IllegalStateException("재고 키를 적재하지 못했습니다: " + StockKeys.stock(itemId));
             }
         }
@@ -132,6 +138,33 @@ public class RedisStockDeduction implements StockDeductionStrategy {
         afterCommit(() -> redis.opsForValue().set(StockKeys.stock(itemId), String.valueOf(quantity)));
     }
 
+    @Override
+    public boolean adjust(StoresItems lockedItem, int initialQuantity) {
+        Long itemId = lockedItem.getId();
+        long delta = (long) initialQuantity - lockedItem.getInitialQuantity();
+        if (delta < 0) {
+            String result = executeAdjust(itemId, delta);
+            if (MISSING.equals(result)) {
+                warmUp(itemId);
+                result = executeAdjust(itemId, delta);
+                if (MISSING.equals(result)) {
+                    throw new IllegalStateException("재고 키를 적재하지 못했습니다: " + StockKeys.stock(itemId));
+                }
+            }
+            if (BELOW_HELD.equals(result)) {
+                return false;
+            }
+            afterRollback(() -> increaseQuietly(itemId, -delta));
+        } else if (delta > 0) {
+            if (!Boolean.TRUE.equals(redis.hasKey(StockKeys.stock(itemId)))) {
+                warmUp(itemId);
+            }
+            afterCommit(() -> increaseQuietly(itemId, delta));
+        }
+        lockedItem.changeInitialQuantity(initialQuantity);
+        return true;
+    }
+
     void release(Long itemId, Long orderId, String userUid, int quantity) {
         try {
             Long result = redis.execute(releaseScript,
@@ -154,6 +187,23 @@ public class RedisStockDeduction implements StockDeductionStrategy {
         args.addAll(orders.findAccountUidsByItemAndStates(itemId, OrderState.ACTIVE));
         redis.execute(warmupScript, List.of(StockKeys.stock(itemId), StockKeys.active(itemId)), args.toArray());
         warmup.increment();
+    }
+
+    private void increaseQuietly(Long itemId, long amount) {
+        try {
+            executeAdjust(itemId, amount);
+        } catch (RuntimeException e) {
+            adjustFailed.increment();
+            log.warn("재고 조정 반영 실패, Reconciliation 이 정정: itemId={} amount={}", itemId, amount, e);
+        }
+    }
+
+    private String executeAdjust(Long itemId, long delta) {
+        String result = redis.execute(adjustScript, List.of(StockKeys.stock(itemId)), String.valueOf(delta));
+        if (result == null) {
+            throw new IllegalStateException("재고 조정 스크립트가 결과를 돌려주지 않았습니다: " + StockKeys.stock(itemId));
+        }
+        return result;
     }
 
     private String executeReserve(Long itemId, String userUid, String idempotencyKey, int quantity) {
@@ -191,6 +241,20 @@ public class RedisStockDeduction implements StockDeductionStrategy {
             @Override
             public void afterCommit() {
                 action.run();
+            }
+        });
+    }
+
+    private static void afterRollback(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status == STATUS_ROLLED_BACK) {
+                    action.run();
+                }
             }
         });
     }

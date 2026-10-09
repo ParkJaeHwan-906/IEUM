@@ -53,6 +53,13 @@ spring:
 server:
   port: ${AUTH_SERVER_PORT:8081}
 
+management:
+  endpoints:
+    web:
+      exposure:
+        # Prometheus 가 /actuator/prometheus 를 긁어 간다 (IEUM_BE/monitoring)
+        include: health,prometheus
+
 ieum:
   auth:
     issuer: ${JWT_ISSUER:http://localhost:8081}

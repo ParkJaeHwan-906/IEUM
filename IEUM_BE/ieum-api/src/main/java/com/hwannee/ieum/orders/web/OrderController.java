@@ -22,6 +22,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/orders")
+@PreAuthorize("hasRole('CONSUMER')")
 public class OrderController {
 
     private final OrderService orderService;
@@ -35,7 +36,6 @@ public class OrderController {
     // Idempotency-Key 는 필수 헤더. 없으면 MissingRequestHeaderException → 400 ProblemDetail
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasRole('CONSUMER')")
     public OrderResponse create(@CurrentUser AuthenticatedUser user,
                                 @RequestHeader("Idempotency-Key") String idempotencyKey,
                                 @Valid @RequestBody CreateOrderRequest request) {
@@ -47,7 +47,6 @@ public class OrderController {
         return orderService.findMine(user);
     }
 
-    // TODO(2.2 정책): READY_FOR_PICKUP 상태에서 소비자 취소를 허용할지. 현재는 활성 상태 전부 허용
     @PostMapping("/{orderId}/cancel")
     public OrderResponse cancel(@CurrentUser AuthenticatedUser user, @PathVariable Long orderId) {
         return orderService.cancel(user, orderId);

@@ -16,7 +16,25 @@ public interface UsersOrdersRepository extends JpaRepository<UsersOrders, Long> 
 
     Optional<UsersOrders> findByIdAndUsersAccount_Uid(Long id, String uid);
 
+    @Query("""
+            select o from UsersOrders o
+            where o.id = :id
+              and o.storesItem.store.usersAccount.uid = :ownerUid
+            """)
+    Optional<UsersOrders> findByIdAndStoreOwnerUid(@Param("id") Long id, @Param("ownerUid") String ownerUid);
+
     List<UsersOrders> findAllByUsersAccount_UidOrderByIdDesc(String uid);
+
+    List<UsersOrders> findAllByStoresItem_IdOrderByIdDesc(Long itemId);
+
+    List<UsersOrders> findAllByStoresItem_IdAndOrderStateOrderByIdDesc(Long itemId, OrderState state);
+
+    @Query("""
+            select count(o) > 0 from UsersOrders o
+            where o.storesItem.store.id = :storeId
+              and o.orderState in :states
+            """)
+    boolean existsByStoreAndStates(@Param("storeId") Long storeId, @Param("states") Collection<OrderState> states);
 
     Optional<UsersOrders> findByUsersAccount_IdAndIdempotencyKey(Long accountId, String idempotencyKey);
 
