@@ -1,6 +1,7 @@
 package com.hwannee.ieum.orders.service;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
+import com.hwannee.ieum.orders.domain.InvalidOrderStateException;
 import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.config.OrderProperties;
@@ -67,7 +68,8 @@ class OrderServiceTest {
 
     @Spy
     OrderProperties properties = new OrderProperties(Duration.ofMinutes(15), new OrderProperties.Retry(3, Duration.ofMillis(10)),
-            new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5));
+            new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5),
+                Duration.ofMinutes(5));
 
     @InjectMocks
     OrderService service;
@@ -244,6 +246,29 @@ class OrderServiceTest {
         service.pickUp(owner, 500L);
 
         then(stock).should().settle(order);
+        then(stock).should(never()).restore(any());
+    }
+
+    @Test
+    void 미승인_자동_취소는_PENDING_을_취소하고_재고를_복구한다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 600L);
+        given(orders.findById(600L)).willReturn(Optional.of(order));
+
+        service.cancelUnapproved(600L);
+
+        assertThat(order.getOrderState()).isEqualTo(OrderState.CANCELED);
+        then(stock).should().restore(order);
+    }
+
+    @Test
+    void 이미_승인된_주문은_자동_취소하지_않는다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 700L);
+        order.approve();
+        given(orders.findById(700L)).willReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.cancelUnapproved(700L))
+                .isInstanceOf(InvalidOrderStateException.class);
+        assertThat(order.getOrderState()).isEqualTo(OrderState.APPROVED);
         then(stock).should(never()).restore(any());
     }
 
