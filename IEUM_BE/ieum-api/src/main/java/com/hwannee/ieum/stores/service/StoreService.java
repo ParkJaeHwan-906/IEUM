@@ -56,12 +56,8 @@ public class StoreService {
     // TODO(README Merchant): 영업 종료(shutdown) — 활성 예약이 남아 있으면 어떻게 할지(거절 후 재고 복구 / 종료 거부) 결정
     // TODO(README Merchant): 예약·픽업 가능 시간 설정(openAt/closeAt 수정)
 
-    // TODO(1.5 소유권 규약): OrderService.ownedByStoreOwner 와 같은 패턴. 규약 확정 후 공통 위치로
     Stores ownedBy(AuthenticatedUser owner, String storeUid) {
-        Stores store = stores.findByUid(storeUid).orElseThrow(StoreException.StoreNotFound::new);
-        if (!store.getUsersAccount().getUid().equals(owner.uid())) {
-            throw new StoreException.NotStoreOwner();
-        }
-        return store;
+        return stores.findByUidAndUsersAccount_Uid(storeUid, owner.uid())
+                .orElseThrow(StoreException.StoreNotFound::new);
     }
 }
