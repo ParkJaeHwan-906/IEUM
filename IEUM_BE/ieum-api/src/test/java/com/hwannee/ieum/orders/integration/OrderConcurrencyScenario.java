@@ -1,6 +1,7 @@
 package com.hwannee.ieum.orders.integration;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
+import com.hwannee.ieum.orders.domain.InvalidOrderStateException;
 import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.exception.OrderException;
@@ -227,6 +228,34 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
         assertThat(ledgerRemaining(item)).isEqualTo(1);
         assertThat(send(consumer, item, UUID.randomUUID().toString())).isEqualTo(Result.CREATED);
         assertThat(ledgerRemaining(item)).isZero();
+    }
+
+    @Test
+    void 준비_완료된_주문은_소비자가_취소할_수_없고_재고도_그대로다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser owner = ownerOf(item);
+        AuthenticatedUser consumer = consumers(1).getFirst();
+        OrderResponse created = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+        orderService.approve(owner, created.orderId());
+        orderService.readyForPickup(owner, created.orderId());
+
+        assertThatThrownBy(() -> orderService.cancel(consumer, created.orderId()))
+                .isInstanceOf(InvalidOrderStateException.class);
+
+        assertThat(orders.findById(created.orderId()).orElseThrow().getOrderState())
+                .isEqualTo(OrderState.READY_FOR_PICKUP);
+        assertThat(ledgerRemaining(item)).isEqualTo(STOCK - 1);
+    }
+
+    @Test
+    void 승인된_주문은_소비자가_취소하면_재고가_돌아온다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser consumer = consumers(1).getFirst();
+        OrderResponse created = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+        orderService.approve(ownerOf(item), created.orderId());
+
+        assertThat(orderService.cancel(consumer, created.orderId()).state()).isEqualTo(OrderState.CANCELED);
+        assertThat(ledgerRemaining(item)).isEqualTo(STOCK);
     }
 
     @Test
