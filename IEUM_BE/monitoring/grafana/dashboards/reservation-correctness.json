@@ -772,8 +772,8 @@
     },
     {
       "type": "timeseries",
-      "title": "응답 시간 (평균 · 최대)",
-      "description": "평균 = rate(_sum)/rate(_count). 최대 = 최근 스텝 내 최댓값(_max). 백분위는 히스토그램 버킷을 켜야 볼 수 있다 (가이드 참고).",
+      "title": "응답 시간 (평균 · p99 · 최대)",
+      "description": "평균 = rate(_sum)/rate(_count). p99 = histogram_quantile(0.99, _bucket) — ieum-api 의 percentiles-histogram 설정으로 버킷이 노출된다. 최대 = 최근 스텝 내 최댓값(_max).",
       "id": 15,
       "datasource": {
         "type": "prometheus",
@@ -804,6 +804,16 @@
           "refId": "B",
           "expr": "max by (status) (http_server_requests_seconds_max{job=\"ieum-api\", uri=\"/api/orders\", method=\"POST\"})",
           "legendFormat": "max {{status}}",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, status) (rate(http_server_requests_seconds_bucket{job=\"ieum-api\", uri=\"/api/orders\", method=\"POST\"}[$__rate_interval])))",
+          "legendFormat": "p99 {{status}}",
           "range": true
         }
       ],
