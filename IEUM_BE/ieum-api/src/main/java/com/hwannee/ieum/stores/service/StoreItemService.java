@@ -1,7 +1,12 @@
 package com.hwannee.ieum.stores.service;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
+import com.hwannee.ieum.orders.domain.OrderState;
+import com.hwannee.ieum.orders.domain.UsersOrders;
+import com.hwannee.ieum.orders.repository.UsersOrdersRepository;
+import com.hwannee.ieum.orders.service.ItemSaleCache;
 import com.hwannee.ieum.orders.stock.StockDeductionStrategy;
+import com.hwannee.ieum.orders.web.dto.OrderResponse;
 import com.hwannee.ieum.stores.domain.Stores;
 import com.hwannee.ieum.stores.domain.StoresItems;
 import com.hwannee.ieum.stores.exception.StoreException;
@@ -9,9 +14,11 @@ import com.hwannee.ieum.stores.repository.StoresItemsRepository;
 import com.hwannee.ieum.stores.repository.StoresRepository;
 import com.hwannee.ieum.stores.web.dto.CreateItemRequest;
 import com.hwannee.ieum.stores.web.dto.ItemResponse;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -22,13 +29,18 @@ public class StoreItemService {
     private final StoresRepository stores;
     private final StoreService storeService;
     private final StockDeductionStrategy stock;
+    private final UsersOrdersRepository orders;
+    private final ObjectProvider<ItemSaleCache> saleCache;
 
     public StoreItemService(StoresItemsRepository items, StoresRepository stores, StoreService storeService,
-                            StockDeductionStrategy stock) {
+                            StockDeductionStrategy stock, UsersOrdersRepository orders,
+                            ObjectProvider<ItemSaleCache> saleCache) {
         this.items = items;
         this.stores = stores;
         this.storeService = storeService;
         this.stock = stock;
+        this.orders = orders;
+        this.saleCache = saleCache;
     }
 
     @Transactional
@@ -63,7 +75,45 @@ public class StoreItemService {
                 .toList();
     }
 
-    // TODO(README Merchant): 재고 조정 — initialQuantity 변경 시 remainingQuantity 를 같은 폭으로 조정. 불변식(initial = remaining + active + pickedUp) 유지
-    // TODO(README Merchant): 상품 판매 종료 — lastOrderTime 을 now 로 당기는 방식인지 별도 플래그인지 결정
-    // TODO(README Merchant): 상품별 예약 현황 조회 — UsersOrdersRepository 에 storeItem 기준 조회 추가
+    @Transactional
+    public ItemResponse adjustQuantity(AuthenticatedUser owner, String storeUid, String itemUid, int initialQuantity) {
+        StoresItems item = ownedItemForUpdate(owner, storeUid, itemUid);
+        if (!stock.adjust(item, initialQuantity)) {
+            throw new StoreException.QuantityBelowHeld();
+        }
+        return ItemResponse.from(item);
+    }
+
+    @Transactional
+    public ItemResponse close(AuthenticatedUser owner, String storeUid, String itemUid) {
+        StoresItems item = ownedItemForUpdate(owner, storeUid, itemUid);
+        LocalDateTime now = LocalDateTime.now();
+        if (item.isSaleClosedAt(now)) {
+            throw new StoreException.ItemSaleClosed();
+        }
+        item.closeSale(now);
+        saleCache.ifAvailable(cache -> cache.evictAfterCommit(item.getUid()));
+        return ItemResponse.from(item);
+    }
+
+    @Transactional(readOnly = true)
+    public List<OrderResponse> findOrders(AuthenticatedUser owner, String storeUid, String itemUid, OrderState state) {
+        StoresItems item = ownedItem(owner, storeUid, itemUid);
+        List<UsersOrders> found = state == null
+                ? orders.findAllByStoresItem_IdOrderByIdDesc(item.getId())
+                : orders.findAllByStoresItem_IdAndOrderStateOrderByIdDesc(item.getId(), state);
+        return found.stream()
+                .map(OrderResponse::forOwner)
+                .toList();
+    }
+
+    private StoresItems ownedItem(AuthenticatedUser owner, String storeUid, String itemUid) {
+        return items.findOwnedByUid(itemUid, storeUid, owner.uid())
+                .orElseThrow(StoreException.ItemNotFound::new);
+    }
+
+    private StoresItems ownedItemForUpdate(AuthenticatedUser owner, String storeUid, String itemUid) {
+        return items.findOwnedByUidForUpdate(itemUid, storeUid, owner.uid())
+                .orElseThrow(StoreException.ItemNotFound::new);
+    }
 }
