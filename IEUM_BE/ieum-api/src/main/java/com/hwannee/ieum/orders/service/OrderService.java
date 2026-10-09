@@ -1,9 +1,11 @@
 package com.hwannee.ieum.orders.service;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
+import com.hwannee.ieum.orders.config.OrderProperties;
 import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.exception.OrderException;
+import com.hwannee.ieum.orders.expiry.ExpiryIndex;
 import com.hwannee.ieum.orders.repository.UsersOrdersRepository;
 import com.hwannee.ieum.orders.stock.StockDeductionStrategy;
 import com.hwannee.ieum.orders.web.dto.CreateOrderRequest;
@@ -17,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 public class OrderService {
@@ -25,19 +28,32 @@ public class OrderService {
     private final StoresItemsRepository items;
     private final UsersAccountRepository accounts;
     private final StockDeductionStrategy stock;
+    private final ExpiryIndex expiryIndex;
+    private final OrderProperties properties;
 
     public OrderService(UsersOrdersRepository orders, StoresItemsRepository items,
-                        UsersAccountRepository accounts, StockDeductionStrategy stock) {
+                        UsersAccountRepository accounts, StockDeductionStrategy stock,
+                        ExpiryIndex expiryIndex, OrderProperties properties) {
         this.orders = orders;
         this.items = items;
         this.accounts = accounts;
         this.stock = stock;
+        this.expiryIndex = expiryIndex;
+        this.properties = properties;
     }
 
     @Transactional
     public OrderResponse create(AuthenticatedUser user, CreateOrderRequest request, String idempotencyKey) {
+        StoresItems item = (stock.locksItemRow()
+                ? items.findByUidForUpdate(request.itemUid())
+                : items.findByUid(request.itemUid()))
+                .orElseThrow(OrderException.ItemNotFound::new);
         UsersAccount account = accounts.findByUid(user.uid()).orElseThrow(OrderException.AccountNotFound::new);
-        StoresItems item = items.findByUid(request.itemUid()).orElseThrow(OrderException.ItemNotFound::new);
+
+        Optional<UsersOrders> previous = orders.findByUsersAccount_IdAndIdempotencyKey(account.getId(), idempotencyKey);
+        if (previous.isPresent()) {
+            return replayOf(previous.get(), request.itemUid());
+        }
 
         if (item.getStore().isShutdown() || LocalDateTime.now().isAfter(item.getLastOrderTime())) {
             throw new OrderException.ItemNotOnSale();
@@ -48,8 +64,23 @@ public class OrderService {
         }
 
         stock.deduct(item.getId(), request.quantity());
-        UsersOrders order = orders.save(new UsersOrders(account, item, request.quantity()));
+        UsersOrders order = orders.save(new UsersOrders(account, item, request.quantity(), idempotencyKey));
         return OrderResponse.from(order);
+    }
+
+    @Transactional
+    public OrderResponse place(AuthenticatedUser user, Long itemId, int quantity, String idempotencyKey) {
+        UsersAccount account = accounts.findByUid(user.uid()).orElseThrow(OrderException.AccountNotFound::new);
+        StoresItems item = items.findById(itemId).orElseThrow(OrderException.ItemNotFound::new);
+        UsersOrders order = orders.save(new UsersOrders(account, item, quantity, idempotencyKey));
+        return OrderResponse.from(order);
+    }
+
+    @Transactional(readOnly = true)
+    public OrderResponse replay(AuthenticatedUser user, String itemUid, String idempotencyKey) {
+        UsersOrders previous = orders.findByUsersAccount_UidAndIdempotencyKey(user.uid(), idempotencyKey)
+                .orElseThrow(OrderException.OrderNotFound::new);
+        return replayOf(previous, itemUid);
     }
 
     @Transactional(readOnly = true)
@@ -59,14 +90,13 @@ public class OrderService {
                 .toList();
     }
 
-    // 소유권 검사: 조회 조건에 uid 를 넣어 타인의 주문은 존재하지 않는 것으로 취급한다 (404)
     @Transactional
     public OrderResponse cancel(AuthenticatedUser user, Long orderId) {
         UsersOrders order = orders.findByIdAndUsersAccount_Uid(orderId, user.uid())
                 .orElseThrow(OrderException.OrderNotFound::new);
         order.cancel();
-        stock.restore(order.getStoresItem().getId(), order.getQuantity());
-        // TODO(2.2 만료): READY_FOR_PICKUP 에서 취소되면 Sorted Set 에서 ZREM
+        stock.restore(order);
+        expiryIndex.remove(order.getId());
         return OrderResponse.from(order);
     }
 
@@ -81,7 +111,7 @@ public class OrderService {
     public OrderResponse readyForPickup(AuthenticatedUser owner, Long orderId) {
         UsersOrders order = ownedByStoreOwner(owner, orderId);
         order.readyForPickup();
-        // TODO(2.2 만료): ZADD orders:expiry {orderId} score = readyAt + OrderProperties.pickupTtl
+        expiryIndex.register(order.getId(), order.getReadyAt().plus(properties.pickupTtl()));
         // TODO(2.2 픽업 코드): 발급 후 응답에 포함
         return OrderResponse.from(order);
     }
@@ -91,11 +121,25 @@ public class OrderService {
         UsersOrders order = ownedByStoreOwner(owner, orderId);
         // TODO(2.2 픽업 코드): 요청의 코드와 대조
         order.pickUp();
-        // TODO(2.2 만료): ZREM orders:expiry {orderId}
+        stock.settle(order);
+        expiryIndex.remove(order.getId());
         return OrderResponse.from(order);
     }
 
-    // TODO(2.2 만료): Expiry Worker 가 호출할 expire(orderId). expire() 전이 + stock.restore, 복구는 주문당 1회 보장
+    @Transactional
+    public void expire(Long orderId) {
+        UsersOrders order = orders.findById(orderId).orElseThrow(OrderException.OrderNotFound::new);
+        order.expire();
+        stock.restore(order);
+    }
+
+    @Transactional
+    public void cancelUnapproved(Long orderId) {
+        UsersOrders order = orders.findById(orderId).orElseThrow(OrderException.OrderNotFound::new);
+        order.cancelUnapproved();
+        stock.restore(order);
+    }
+
     // TODO(2.2 점주 취소): 점주가 PENDING 을 거절하는 경로. cancel 과 같은 전이지만 소유권 검사가 다르다
 
     // TODO(1.5 소유권 규약): 같은 패턴이 StoresItems·ItemsReviews 에도 반복되므로 규약을 정한 뒤 공통 위치로 옮긴다.
@@ -107,5 +151,12 @@ public class OrderService {
             throw new OrderException.NotStoreOwner();
         }
         return order;
+    }
+
+    private static OrderResponse replayOf(UsersOrders previous, String itemUid) {
+        if (!previous.getStoresItem().getUid().equals(itemUid)) {
+            throw new OrderException.IdempotencyKeyReused();
+        }
+        return OrderResponse.from(previous);
     }
 }

@@ -13,7 +13,10 @@ import java.time.LocalDateTime;
 
 @Entity
 @Getter
-@Table(name = "users_orders")
+@Table(name = "users_orders",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_users_orders_account_idempotency_key", columnNames = {"user_account_id", "idempotency_key"}),
+        indexes = @Index(name = "idx_users_orders_state_created", columnList = "order_state, created_at"))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class UsersOrders extends BaseTimeEntity {
 
@@ -43,18 +46,21 @@ public class UsersOrders extends BaseTimeEntity {
     @Column(name = "ready_at")
     private LocalDateTime readyAt;
 
+    @Column(name = "idempotency_key", length = 64, updatable = false)
+    private String idempotencyKey;
+
     // TODO(2.2 픽업 코드): pickup_code 컬럼 추가. readyForPickup() 시 발급, pickUp() 시 검증
-    // TODO(2.2 멱등성): idempotency_key 컬럼 또는 별도 테이블. (user_account_id, idempotency_key) unique
 
     @Version
     private Long version;
 
-    public UsersOrders(UsersAccount usersAccount, StoresItems storesItem, Integer quantity) {
+    public UsersOrders(UsersAccount usersAccount, StoresItems storesItem, Integer quantity, String idempotencyKey) {
         this.usersAccount = usersAccount;
         this.storesItem = storesItem;
         this.quantity = quantity;
         this.orderPrice = storesItem.getSalePrice();
         this.orderState = OrderState.PENDING;
+        this.idempotencyKey = idempotencyKey;
     }
 
     public void approve() {
@@ -77,6 +83,11 @@ public class UsersOrders extends BaseTimeEntity {
         if (!orderState.isActive()) {
             throw new InvalidOrderStateException(orderState, "취소");
         }
+        this.orderState = OrderState.CANCELED;
+    }
+
+    public void cancelUnapproved() {
+        require(OrderState.PENDING, "미승인 자동 취소");
         this.orderState = OrderState.CANCELED;
     }
 

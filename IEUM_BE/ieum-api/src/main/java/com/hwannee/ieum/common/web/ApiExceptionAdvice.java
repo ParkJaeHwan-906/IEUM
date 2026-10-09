@@ -2,9 +2,7 @@ package com.hwannee.ieum.common.web;
 
 import com.hwannee.ieum.common.exception.ApiException;
 import com.hwannee.ieum.orders.domain.InvalidOrderStateException;
-import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.ConcurrencyFailureException;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -27,7 +25,7 @@ public class ApiExceptionAdvice {
         return ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT, e.getMessage());
     }
 
-    @ExceptionHandler({OptimisticLockingFailureException.class, CannotAcquireLockException.class})
+    @ExceptionHandler(ConcurrencyFailureException.class)
     public ResponseEntity<ProblemDetail> contentionExhausted(ConcurrencyFailureException e) {
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(
                 HttpStatus.SERVICE_UNAVAILABLE, "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.");

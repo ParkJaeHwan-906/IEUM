@@ -10,7 +10,7 @@ IEUM 백엔드 작업 목록. 완료된 항목은 체크하고, 배경 설명이
 - [x] 로컬 개발 환경 (Docker Compose - MySQL 8.4, Redis 7.4)
 - [x] 환경변수 외부화 (`.env` + `application.yaml` 플레이스홀더)
 - [x] 인증/인가 — 인증 서버 분리, 단위 테스트, Postman 통합 확인, ADR-0002 (2026-09-12 완료)
-- [~] **예약 도메인 로직** ← 현재 단계 (선결 과제 결정 완료, 구현 착수 전)
+- [~] **예약 도메인 로직** ← 현재 단계 (2026-10-09 생성 경로 완성: 비관적·낙관적·Redis Lua 통합 판정, 멱등키, 1회 복구, Reconciliation 정정. 남은 것은 점주 거절·픽업 코드·정책 결정)
 - [ ] 부하 테스트 및 관측
 - [ ] V2 - Kafka 예약 대기열
 - [ ] V3 - Kubernetes Scale-out
@@ -151,19 +151,21 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - 코드: `PENDING → APPROVED → READY_FOR_PICKUP → PICKED_UP`, 어디서든 `CANCELED`
   - [x] `EXPIRED` 위치 — **`READY_FOR_PICKUP` 진입 후 15분 미픽업** (2026-09-12 결정). 노쇼 방지와 빠른 회전이 목적이며 만료 시 재고를 복구한다
     - `lastOrderTime` 과는 무관. `PENDING` 과 `APPROVED` 에는 만료가 없고 점주의 승인·취소로만 빠져나간다
-    - [ ] 미승인 `PENDING` 이 방치되면 재고가 잠긴 채 남는다 — 점주 미응답 시 자동 취소를 둘지, 운영 알림으로 갈지 결정 필요
+    - [x] 미승인 `PENDING` 은 **5분 안에 다음 상태로 전이되지 않으면 자동 취소** (2026-10-09 결정·구현). `PendingTimeoutJob` 이 10초마다 `created_at <= now − APPROVAL_TIMEOUT` 인 PENDING 을 DB 에서 찾아 `CANCELED` + 재고 복구. 인덱스 `(order_state, created_at)`. [ADR-0004 8절](./adr/0004-reservation-path.md)
   - 재고 흐름: 예약 생성(`PENDING`) 시 차감 → `PICKED_UP` 이면 소진 확정 → `CANCELED`·`EXPIRED` 이면 복구. 복구는 주문당 정확히 1회
   - [x] README 의 상태 표를 코드에 맞게 수정 (`EXPIRED` 포함 6개 상태, 불변식의 필드명도 `initialQuantity`/`remainingQuantity` 로)
 - [x] 재고 필드 — `StoresItems.initialQuantity` / `remainingQuantity` (`initial_quantity` / `remaining_quantity`). `decreaseQuantity` / `increaseQuantity` 에 하한·상한 검사 있음
 - [x] 동시성 제어 방식 — 포트폴리오 목적으로 **세 단계를 모두 구현하고 같은 시나리오(재고 100 / 요청 10,000)로 비교 측정**한다
   1. 잠금 없음 — `remainingQuantity` 조회 후 차감. 초과 예약이 실제로 발생하는 것을 먼저 보인다
   2. `@Version` 낙관적 락 — `StoresItems.version` 충돌 시 `OptimisticLockException`. 재시도 정책과 함께. 정합성은 맞지만 실패율·재시도 폭주·DB 병목을 측정한다
-  3. Redis — Lua Script 로 원자적 차감 (README 설계). Redis 를 재고 원장으로 쓰고 DB 는 결과를 기록
+  3. Redis — Lua Script 로 원자적 차감 (README 설계). Redis 를 재고 원장으로 쓰고 DB 는 결과를 기록 (2026-09-23 두 라운드 측정 완료)
      - 분산락(SETNX/Redisson)은 채택하지 않음. 락 TTL·커밋 전 해제 문제가 있고 여전히 직렬화라 처리량 상한이 락 보유 시간에 묶임. 문서에 절충안으로만 한 줄 언급
      - 문제가 "동시성"에서 "Redis↔DB 정합성"으로 옮겨 감 → 2.2 의 재고 복구 멱등성·Expiry Worker·Reconciliation 이 그 답
-  - (선택) 2 와 3 사이에 조건부 UPDATE 한 문장(`SET remaining = remaining - ? WHERE id = ? AND remaining >= ?`) 을 중간 데이터 포인트로 추가. `@Version` 없이도 정합성이 맞고 재시도가 없어, 낙관적 락의 비용이 어디서 오는지 분리해 보여 줌
+  - [x] (선택) 2 와 3 사이에 조건부 UPDATE 한 문장(`SET remaining = remaining - ? WHERE id = ? AND remaining >= ?`) 을 중간 데이터 포인트로 추가. `@Version` 없이도 정합성이 맞고 재시도가 없어, 낙관적 락의 비용이 어디서 오는지 분리해 보여 줌 (2026-09-17 측정 완료)
   - 측정 항목: 최종 `remainingQuantity`, 성공 건수(정확히 100 이어야 함), p99 지연, DB 커넥션 대기, 재시도 횟수
-  - 각 단계는 프로파일 또는 전략 인터페이스로 갈아 끼울 수 있게 두고 결과를 [ADR-0003](./adr/0003-stock-deduction-concurrency.md) 에 남긴다 (2026-09-12 작성, 1단계까지 기록)
+  - [x] (비교) `synchronized` 두 범위 — `STOCK_STRATEGY=synchronized`, `STOCK_SYNC_SCOPE=create|deduct`. 트랜잭션 밖은 정합성 성립·처리량 1/3 (`active` 1), 트랜잭션 안은 201 이 2,854 (행 락 대기 = 성공 − 1). 전문은 [performance/2026-09-23-synchronized.md](./performance/2026-09-23-synchronized.md) (2026-09-23)
+  - [x] 비관적 락 `pessimistic` (2026-10-09) — `SELECT … FOR UPDATE` 를 트랜잭션 첫 문장으로 (REPEATABLE READ 스냅샷이 잠금 이후에 생기도록). 중복 요청 부하(1,000 명 × 100) 에서 201 정확히 1,000, 사용자당 1건, 행 락 대기 = 요청 수 − 1, 319 req/s. [ADR-0004](./adr/0004-reservation-path.md), [performance/2026-10-09-duplicate-burst.md](./performance/2026-10-09-duplicate-burst.md)
+  - 각 단계는 프로파일 또는 전략 인터페이스로 갈아 끼울 수 있게 두고 결과를 [ADR-0003](./adr/0003-stock-deduction-concurrency.md) 에 남긴다 (2026-09-12 작성, 2026-09-23 결정 확정: `redis` 채택, `conditional` 은 두 번째 답)
 
 ### 2.2 구현
 
@@ -176,7 +178,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - [x] 1단계 k6 시나리오로 초과 예약 재현 후 결과 기록 (2026-09-12) — 201 이 1,996건, 초과 예약 1,896건, 최종 remaining 0. 전문은 [performance/2026-09-12-stage1-naive.md](./performance/2026-09-12-stage1-naive.md)
     - SQL 로그(`debug`/`trace`)가 켜진 채 측정됨. 2026-09-14 에 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 같은 문서에 덧붙임 — 201 이 2,000건, p99 663ms, ≈ 493 req/s 로 로그 켠 값과 편차 안. 로그는 병목이 아니었음
     - `Thread.sleep` 없이도 재현되므로 넣지 않는다
-  - [x] **2단계 낙관적 락 + 재시도 계층** (2026-09-17 라운드 2 까지 완료, (선택) 7 만 남음) — 구현 순서와 함정은 [2단계 가이드](./guides/stage2-optimistic-retry-guide.md)
+  - [x] **2단계 낙관적 락 + 재시도 계층** (2026-09-17 라운드 2 와 (선택) 7 까지 완료) — 구현 순서와 함정은 [2단계 가이드](./guides/stage2-optimistic-retry-guide.md)
     - [x] 0. 1단계를 `SQL_LOG_LEVEL=warn`, `SQL_BIND_LOG_LEVEL=off` 로 재측정해 performance 기록에 덧붙임 (지연 비교의 기준선, 2026-09-14). 지연 차이는 편차 안이라 병목 후보는 HikariCP 대기·트랜잭션당 왕복 수로 좁혀짐 → 4번 계측에서 확인
     - [x] 0-b. 1단계를 계측 포함으로 재측정 (2026-09-16, 같은 문서에 덧붙임) — 0번에는 HikariCP·attempts 지표가 없어 라운드 1 의 "지연은 커넥션 대기" 해석을 전략 비용과 실험 조건으로 가를 수 없었음. 결과: naive 도 `pending` 80 / `acquire` 141ms 로 같음 → 풀 앞의 줄은 VU 100 / 풀 20 의 성질. 롤백 0, `version` 0 (벌크 UPDATE 의 `@Version` 우회 증거)
     - [x] 1. 재시도 계층 — `OrderService.create` 를 감싸는 별도 빈 (`orders/service/OrderCreateRetrier` 또는 유사)
@@ -201,7 +203,10 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
         - [x] `OrderCreateRetrier` 가 `CannotAcquireLockException`(데드락 희생자) 도 재시도 (2026-09-17). 카운터에 `outcome=deadlock` 태그 추가, `ApiExceptionAdvice` 503 핸들러를 두 예외로 확장, 단위 테스트 4건 추가 (데드락 후 성공 / 상한까지 데드락 / 충돌·데드락 혼합 / 락 대기 타임아웃 미재시도). 배경은 [2단계 가이드 9절](./guides/stage2-optimistic-retry-guide.md#9-라운드-2--fk-데드락과-flush-순서)
         - [x] `reset-loadtest.sql` 에 `ALTER TABLE users_orders AUTO_INCREMENT = 1` 추가 (2026-09-16) — `MAX(id) − COUNT(*)` 가 해당 라운드의 롤백 수를 바로 가리키게. `information_schema.TABLES` 는 하루 캐시라 확인은 `information_schema_stats_expiry = 0` 후
         - [x] 기대: 500 이 0. 데드락으로 죽던 트랜잭션이 `@Version` 검사까지 가므로 충돌·503 은 늘 수 있음 — 그 수치가 "재고가 있는데 답을 못 준 요청" 의 진짜 값 → 실측 500 0 / 503 574
-    - [ ] (선택) 7. 조건부 UPDATE 한 문장 — `StoresItemsRepository` 의 TODO(2.1 선택 단계). `@Version` 없이 재시도도 없는 중간 데이터 포인트. 시간이 허락하면 같은 형식으로 측정
+    - [x] (선택) 7. 조건부 UPDATE 한 문장 (2026-09-17) — `ConditionalUpdateStockDeduction`, `STOCK_STRATEGY=conditional`. 구현·측정 절차는 [조건부 UPDATE 가이드](./guides/stage2-conditional-update-guide.md)
+      - 결과: 201 정확히 100, **503 0, 충돌 0, 커넥션 획득 정확히 10,000, `version` 0**. 재고 소진 0.76초 (라운드 2 는 5초), p95 236ms / p99 669ms, ≈ 758 req/s. 행 락 대기 118회 · 평균 117ms (처음 측정). 전문은 [performance/2026-09-17-stage2-conditional-update.md](./performance/2026-09-17-stage2-conditional-update.md)
+      - 라운드 2 의 503 574 는 재시도 상한의 산물이었고, p99 는 naive 와 같은 수준이라 정체는 VU 100 / 풀 20 커넥션 대기. ADR-0003 "낙관적 락 비용의 분해" 에 기록
+      - 부수 관찰: 주문 `order_price` 5,000 — 확인 결과 시드의 `sale_price` 가 5,000(`original_price` 10,000) 이라 정상. `UsersOrders` 생성자는 `salePrice` 를 쓰고 `OrderServiceTest` 가 단언 (2026-10-09)
 - [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
   - 점주: `POST /api/owner/stores`, `GET /api/owner/stores/me`, `POST /api/owner/stores/{storeUid}/items` (`OwnerStoreController`, BUSINESS_OWNER)
   - 공개: `GET /api/stores/{storeUid}`, `GET /api/stores/{storeUid}/items`, `GET /api/items/{itemUid}` (permitAll 경로)
@@ -211,16 +216,31 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 - [x] 부하 테스트 SQL 시드 — `IEUM_BE/scripts/sql/seed-loadtest.sql` (점주 1·가게 1·재고 100 상품 1·소비자 N, 기본 10,000 — 1인 1요청으로 "재고 100 / 요청 10,000" 을 맞춤. 소비자 1,000 이면 중복 활성 예약 검사가 요청 대부분을 걸러 재고 경합이 사라진다), `reset-loadtest.sql` (라운드 간 재고·주문 초기화). 실행은 호스트 mysql 이 아니라 `docker exec -i ieum-mysql mysql --default-character-set=utf8mb4` 파이프 (스크립트 상단 주석)
   - 고정 uid: 점주 `1111…`, 가게 `2222…`, 상품 `3333…`. 비밀번호는 전부 `password1`
   - 재실행 가능. 테이블은 서버를 한 번 기동해 Hibernate 가 만든 뒤여야 함
-- [ ] Redis Lua Script 기반 원자적 재고 차감
-- [ ] Idempotency-Key 처리 (24시간 보존)
+- [x] Redis Lua Script 기반 원자적 재고 차감 (2026-09-23) — 설계 결정·구현·측정 절차는 [3단계 가이드](./guides/stage3-redis-lua-guide.md). 결과: 201 정확히 100, 보상 0, **행 락 대기 0**, 재고 소진 0.40 / 0.69초, p99 808 / 589ms (두 라운드, 편차 큼). 전문은 [performance/2026-09-23-stage3-redis.md](./performance/2026-09-23-stage3-redis.md)
+  - `stores_items.remaining_quantity` 는 예약 경로에서 읽지도 쓰지도 않는다 (X 락 직렬화가 돌아오므로). 원장은 `stock:{itemId}`, DB 열은 투영
+  - 차감은 즉시, 보상 INCRBY 는 `afterCompletion(STATUS_ROLLED_BACK)`, 복구 INCRBY 는 `afterCommit`. 남는 창 두 개(차감 후 커밋 전 / 커밋 후 INCRBY 전)는 Reconciliation 의 몫
+  - [x] Lua 판정과 사전 검사를 DB 트랜잭션 앞으로 (2026-10-09) — `RedisOrderCreator`. 판매 조건은 `ItemSaleCache`(5초), 멱등키·중복·재고는 `stock-reserve.lua` 한 번. 100,000 요청 중 커넥션 획득 1,011 회 ([ADR-0004](./adr/0004-reservation-path.md))
+  - [x] Lettuce 풀링 (2026-10-09) — `commons-pool2` 추가. 풀 32 를 Tomcat 200 스레드가 나눠 써 애플리케이션 측 스크립트 시간 평균 47ms (서버 12.6µs). 다음 튜닝 지점
+  - [~] `redis` 전략에서 `GET /api/items/{itemUid}` 의 `remainingQuantity` 는 투영 — Reconciliation 이 60초마다 DB 열을 기대값으로 갱신 (2026-10-09). 조회 경로가 Redis 를 직접 볼지는 미결
+- [x] Idempotency-Key 처리 (2026-10-09) — 모든 전략: `users_orders.idempotency_key` + unique(user_account_id, idempotency_key), 재요청은 같은 201·본문, 다른 상품에 재사용 409. redis 는 Lua 안에서 PENDING(30초) → 커밋 후 orderId(1일)
 - [x] 예약 생성 전제 조건 (2026-09-12) — 영업 종료·`lastOrderTime` 경과 시 `ItemNotOnSale`, 동일 사용자 + 동일 상품 활성 예약이 있으면 `DuplicateActiveOrder`. 재고 차감 전에 검사. `OrderServiceTest` 로 검증
-  - DB 조회 기반이라 동시 요청 사이의 틈은 남아 있음. 3단계에서 중복 검사를 Lua 스크립트 안으로 옮겨 닫는다
+  - [x] 동시 요청 사이의 틈 (2026-10-09) — pessimistic 은 잠금을 트랜잭션 첫 문장으로 두어 닫고, redis 는 Lua 의 활성 사용자 SET 으로 닫는다. optimistic 은 같은 행의 `@Version` 이 우연히 닫는다 (실측 0, ADR-0004 2절). conditional·naive 는 열려 있음
 - [x] `OrderState.EXPIRED` 추가, `UsersOrders.expire()` 전이 — `READY_FOR_PICKUP` 에서만 허용. 그 외 상태에서 예외로 둘지 무시할지는 Expiry Worker 구현 시 결정
 - [x] `UsersOrders` 에 `ready_at` 컬럼 추가 — `readyForPickup()` 호출 시 기록. 만료 판정 기준
-- [ ] TTL 기반 예약 만료 — `ready_at + 15분`. 시간은 설정값(`PICKUP_TTL`, 기본 `PT15M`)
-- [ ] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음) — `readyForPickup()` 시 `ZADD` (score = 만료 시각), 워커가 `ZRANGEBYSCORE` 로 지난 것을 꺼내 `expire()` + 재고 복구
-- [ ] 재고 복구 멱등성 (예약당 1회)
-- [ ] Reconciliation Job — 지연·누락 만료 탐지
+- [~] TTL 기반 예약 만료 — `ready_at + PICKUP_TTL`. 뼈대 생성 (2026-09-23): `OrderService.readyForPickup` 이 `ExpiryIndex.register(orderId, readyAt + pickupTtl)`, `pickUp`·`cancel` 이 `remove`. 전부 `afterCommit` 에 등록 (커밋 전 ZADD 는 롤백된 주문을 인덱스에 남긴다)
+- [~] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음) — 뼈대 생성 (2026-09-23). `ieum-api` / `orders/expiry/`
+  - `ExpiryIndex` — `orders:expiry` ZSET, member = orderId, score = 만료 시각 epoch 초. `register`·`remove`(커밋 후)·`pollDue(now, limit)`
+  - `ExpiryWorker` — `@Scheduled(fixedDelay = EXPIRY_POLL_INTERVAL, 기본 PT5S)`. `OrderService.expire(orderId)` 호출 후 ZREM. `InvalidOrderState`·`OrderNotFound` 는 건너뛰고 ZREM, 그 외 예외는 인덱스에 남겨 다음 주기 재시도. 카운터 `order.expiry{outcome=expired|skipped|failed}`
+  - `OrderService.expire(orderId)` — `expire()` 전이 + `stock.restore`. `@EnableScheduling` 은 `OrderConfig`
+  - 단위 테스트 `ExpiryIndexTest` 5건, `ExpiryWorkerTest` 4건. 기동 확인: 워커·Job 이 스케줄대로 돌고 카운터 노출
+  - [ ] 다중 인스턴스에서 같은 id 를 두 워커가 꺼내는 문제 — `ZPOPMIN` 계열 또는 리더 선출 (V3)
+  - [ ] 만료 후 응답·알림 — 소비자에게 EXPIRED 를 어떻게 알릴지 (조회 시 상태만 / 푸시)
+- [x] 재고 복구 멱등성 (예약당 1회, 2026-10-09) — `restore(UsersOrders)` 로 시그니처 변경, redis 는 `stock-release.lua` 가 `stock:{id}:restored:{orderId}` SET NX 성공 시에만 INCRBY. 실패는 예외 대신 카운터, Reconciliation 이 정정
+- [x] Reconciliation Job — **`redis` 전략에서는 필수**. 뼈대 생성 (2026-09-23): `orders/reconcile/StockReconciliationJob` (`STOCK_STRATEGY=redis` 일 때만, `RECONCILIATION_INTERVAL` 기본 PT60S). 상품마다 `기대값 = initial − 활성 수량 − 픽업 완료 수량` (`UsersOrdersRepository.sumQuantityByItemAndStates`) 을 `GET stock:{id}` 와 대조해 `stock.reconciliation{outcome=checked|mismatch|missing}` 카운터 + WARN. 2026-10-09 정정까지 구현
+  - [x] 정정 정책 — 두 주기 연속 (기대값, Redis 값, 초과·누락 사용자) 가 완전히 같을 때만 `INCRBY 차이` + SREM/SADD. "차이 값만 같으면" 은 진행 중 예약을 유실로 오인해 초과 예약을 만들 수 있어 버림
+  - [x] DB 투영 갱신 — 대조마다 `remaining_quantity = 기대값`. 워밍업은 이제 투영이 아니라 DB 주문 상태로 계산
+  - [x] 만료 누락 탐지 — `findReadyForPickupBefore(now − PICKUP_TTL)` 를 `ExpiryIndex` 에 재등록
+  - [x] 복구 상한 검사 — 기대값이 DB 주문 상태로 계산되므로 정정 자체가 상한을 지킨다. 전체 상품 순회는 100건 페이징
 - [ ] 픽업 코드 발급 및 검증
 
 ---
@@ -233,7 +253,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - [x] 인증 API 명세는 우선 Notion 에 수기 작성 (이음 > API 명세서, 2026-09-10). 예약·상품 API 구현 시 이어서 추가
   - 코드 기반 문서 도구 도입 여부는 예약 도메인 착수 후 결정
 - [ ] `JPA_DDL_AUTO` 를 `validate` 로 전환하고 스키마 마이그레이션 도구 도입 검토 (Flyway)
-- [ ] Testcontainers 기반 통합 테스트
+- [x] Testcontainers 기반 통합 테스트 (2026-10-09) — `ieum-api` / `orders/integration/`. MySQL 8.4 + Redis 7.4, 세 전략이 `OrderConcurrencyScenario` 상속, Docker 없으면 건너뜀
 
 ---
 

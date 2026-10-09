@@ -2,8 +2,10 @@ package com.hwannee.ieum.orders.service;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
 import com.hwannee.ieum.orders.config.OrderProperties;
+import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.exception.OrderException;
+import com.hwannee.ieum.orders.stock.StockDeductionStrategy;
 import com.hwannee.ieum.orders.web.dto.CreateOrderRequest;
 import com.hwannee.ieum.orders.web.dto.OrderResponse;
 import com.hwannee.ieum.stores.domain.StoresItems;
@@ -201,8 +203,18 @@ class OrderCreateRetrierTest {
 
     private OrderCreateRetrier retrier(int maxAttempts) {
         OrderProperties properties = new OrderProperties(
-                Duration.ofMinutes(15), new OrderProperties.Retry(maxAttempts, Duration.ZERO));
-        return new OrderCreateRetrier(orderService, properties, registry);
+                Duration.ofMinutes(15), new OrderProperties.Retry(maxAttempts, Duration.ZERO),
+                new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5),
+                Duration.ofMinutes(5));
+        return new OrderCreateRetrier(orderService, new StockDeductionStrategy() {
+            @Override
+            public void deduct(Long itemId, int quantity) {
+            }
+
+            @Override
+            public void restore(UsersOrders order) {
+            }
+        }, properties, registry);
     }
 
     private static ObjectOptimisticLockingFailureException conflict() {

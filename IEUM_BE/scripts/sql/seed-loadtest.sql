@@ -1,4 +1,6 @@
--- 부하 테스트 시드. 점주 1명, 가게 1개, 재고 100 인 상품 1개, 소비자 N명을 만든다.
+-- 부하 테스트 시드. 점주 1명, 가게 1개, 재고 @stock 인 상품 1개, 소비자 N명을 만든다.
+-- 소비자 수와 재고는 앞에 SET 을 붙여 바꾼다 (기본 10,000 / 100). 100,000 요청 시나리오(duplicate-burst.js) 는 1,000 / 1,000:
+--   ( echo "SET @consumers = 1000; SET @stock = 1000;"; cat scripts/sql/seed-loadtest.sql ) | docker exec -i ieum-mysql mysql --default-character-set=utf8mb4 -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE>
 -- 다시 실행하면 기존 부하 테스트 데이터를 지우고 새로 만든다 (이메일 도메인 @loadtest.ieum 기준).
 --
 -- 실행 (호스트에 mysql 클라이언트가 없으므로 컨테이너의 클라이언트에 파이프로 넘긴다. IEUM_BE 에서):
@@ -10,12 +12,18 @@
 -- 고정 값 (k6 스크립트에서 그대로 사용)
 --   점주   email owner@loadtest.ieum / password1 / account uid 11111111-1111-1111-1111-111111111111
 --   가게   uid 22222222-2222-2222-2222-222222222222
---   상품   uid 33333333-3333-3333-3333-333333333333, initial_quantity 100
+--   상품   uid 33333333-3333-3333-3333-333333333333, initial_quantity @stock (기본 100)
 --   소비자 email consumer{1..N}@loadtest.ieum / password1
 --
--- TODO(3단계 Redis): 시드 후 stock:{item_id} 키를 100 으로 SET 하는 단계 추가 (또는 API 서버 기동 시 워밍업)
+-- redis 전략일 때는 시드 뒤에 재고 키도 넣는다. 시드를 다시 돌리면 상품 행이 새 id 로 들어가므로 id 는 매번 확인하고 옛 키는 DEL 한다:
+--   docker exec -i ieum-mysql mysql -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE> -e "SELECT id FROM stores_items WHERE uid = '33333333-3333-3333-3333-333333333333'"
+--   docker exec ieum-redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning --scan --pattern "stock:{*" | xargs -r redis-cli -a "$REDIS_PASSWORD" --no-auth-warning DEL'
+--   docker exec ieum-redis sh -c 'redis-cli -a "$REDIS_PASSWORD" --no-auth-warning SET "stock:{<item_id>}" <stock>'
+--   키는 해시 태그 형식 stock:{id}, stock:{id}:active (활성 예약 사용자), stock:{id}:idem:* (멱등키), stock:{id}:restored:* (복구 1회 표식)
+--   키를 넣지 않아도 첫 예약이 워밍업 경로(DB 주문 상태로 계산해 SET NX)로 채우지만, 그 DB 조회가 첫 요청 무리의 지연에 섞이므로 측정 전에는 직접 넣는다
 
-SET @consumers = 10000;
+SET @consumers = COALESCE(@consumers, 10000);
+SET @stock = COALESCE(@stock, 100);
 SET @password_hash = '$2a$10$g.wCArFuHKZzC20xuWdkR.mkW.8Zzp9GCKGy4mR7UCQ.rGm0jLiDm';  -- BCrypt("password1")
 SET @owner_uid = '11111111-1111-1111-1111-111111111111';
 SET @store_uid = '22222222-2222-2222-2222-222222222222';
@@ -65,11 +73,11 @@ INSERT INTO stores (user_account_id, uid, name, logo_img_url, store_type, open_a
 SELECT id, @store_uid, '부하 테스트 가게', NULL, 'BAKERY', '09:00:00', '22:00:00', NULL, NOW(6), NOW(6)
   FROM users_account WHERE uid = @owner_uid;
 
--- 상품 (재고 100)
+-- 상품 (재고 @stock)
 INSERT INTO stores_items (store_id, uid, item_img_url, name, original_price, sale_price,
                           initial_quantity, remaining_quantity, last_order_time, version, created_at, updated_at)
 SELECT id, @item_uid, NULL, '부하 테스트 상품', 10000, 5000,
-       100, 100, DATE_ADD(NOW(6), INTERVAL 7 DAY), 0, NOW(6), NOW(6)
+       @stock, @stock, DATE_ADD(NOW(6), INTERVAL 7 DAY), 0, NOW(6), NOW(6)
   FROM stores WHERE uid = @store_uid;
 
 -- 소비자 N명

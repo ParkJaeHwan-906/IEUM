@@ -28,6 +28,10 @@ public abstract class OrderException extends ApiException {
     }
 
     public static final class InsufficientStock extends OrderException {
+        public InsufficientStock() {
+            super(HttpStatus.CONFLICT, "재고가 부족합니다.");
+        }
+
         public InsufficientStock(int remaining) {
             super(HttpStatus.CONFLICT, "재고가 부족합니다. 남은 수량: " + remaining);
         }
@@ -40,10 +44,15 @@ public abstract class OrderException extends ApiException {
         }
     }
 
-    // TODO(2.2 멱등성): README 의 409 IDEMPOTENCY_KEY_REUSED
     public static final class IdempotencyKeyReused extends OrderException {
         public IdempotencyKeyReused() {
             super(HttpStatus.CONFLICT, "같은 Idempotency-Key 로 다른 요청이 이미 처리되었습니다.");
+        }
+    }
+
+    public static final class IdempotencyInProgress extends OrderException {
+        public IdempotencyInProgress() {
+            super(HttpStatus.CONFLICT, "같은 Idempotency-Key 의 요청이 아직 처리 중입니다.");
         }
     }
 

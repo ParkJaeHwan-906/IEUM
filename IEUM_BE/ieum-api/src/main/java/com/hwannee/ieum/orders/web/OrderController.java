@@ -2,7 +2,7 @@ package com.hwannee.ieum.orders.web;
 
 import com.hwannee.ieum.auth.verify.principal.AuthenticatedUser;
 import com.hwannee.ieum.auth.verify.principal.CurrentUser;
-import com.hwannee.ieum.orders.service.OrderCreateRetrier;
+import com.hwannee.ieum.orders.service.OrderCreator;
 import com.hwannee.ieum.orders.service.OrderService;
 import com.hwannee.ieum.orders.web.dto.CreateOrderRequest;
 import com.hwannee.ieum.orders.web.dto.OrderResponse;
@@ -25,22 +25,21 @@ import java.util.List;
 public class OrderController {
 
     private final OrderService orderService;
-    private final OrderCreateRetrier orderCreateRetrier;
+    private final OrderCreator orderCreator;
 
-    public OrderController(OrderService orderService, OrderCreateRetrier orderCreateRetrier) {
+    public OrderController(OrderService orderService, OrderCreator orderCreator) {
         this.orderService = orderService;
-        this.orderCreateRetrier = orderCreateRetrier;
+        this.orderCreator = orderCreator;
     }
 
     // Idempotency-Key 는 필수 헤더. 없으면 MissingRequestHeaderException → 400 ProblemDetail
-    // TODO(2.2 멱등성): 재요청 시 201 이 아니라 최초 결과의 상태 코드를 그대로 돌려줄지 결정
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasRole('CONSUMER')")
     public OrderResponse create(@CurrentUser AuthenticatedUser user,
                                 @RequestHeader("Idempotency-Key") String idempotencyKey,
                                 @Valid @RequestBody CreateOrderRequest request) {
-        return orderCreateRetrier.create(user, request, idempotencyKey);
+        return orderCreator.create(user, request, idempotencyKey);
     }
 
     @GetMapping("/me")
