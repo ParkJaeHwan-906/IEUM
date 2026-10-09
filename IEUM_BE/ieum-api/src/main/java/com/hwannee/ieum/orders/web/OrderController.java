@@ -22,6 +22,7 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/orders")
+@PreAuthorize("hasRole('CONSUMER')")
 public class OrderController {
 
     private final OrderService orderService;
@@ -35,7 +36,6 @@ public class OrderController {
     // Idempotency-Key 는 필수 헤더. 없으면 MissingRequestHeaderException → 400 ProblemDetail
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @PreAuthorize("hasRole('CONSUMER')")
     public OrderResponse create(@CurrentUser AuthenticatedUser user,
                                 @RequestHeader("Idempotency-Key") String idempotencyKey,
                                 @Valid @RequestBody CreateOrderRequest request) {
