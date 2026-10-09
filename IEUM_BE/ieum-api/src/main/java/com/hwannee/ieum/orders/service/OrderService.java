@@ -30,16 +30,18 @@ public class OrderService {
     private final StockDeductionStrategy stock;
     private final ExpiryIndex expiryIndex;
     private final OrderProperties properties;
+    private final PickupCodeIssuer pickupCodes;
 
     public OrderService(UsersOrdersRepository orders, StoresItemsRepository items,
                         UsersAccountRepository accounts, StockDeductionStrategy stock,
-                        ExpiryIndex expiryIndex, OrderProperties properties) {
+                        ExpiryIndex expiryIndex, OrderProperties properties, PickupCodeIssuer pickupCodes) {
         this.orders = orders;
         this.items = items;
         this.accounts = accounts;
         this.stock = stock;
         this.expiryIndex = expiryIndex;
         this.properties = properties;
+        this.pickupCodes = pickupCodes;
     }
 
     @Transactional
@@ -104,26 +106,35 @@ public class OrderService {
     public OrderResponse approve(AuthenticatedUser owner, Long orderId) {
         UsersOrders order = ownedByStoreOwner(owner, orderId);
         order.approve();
-        return OrderResponse.from(order);
+        return OrderResponse.forOwner(order);
     }
 
     @Transactional
     public OrderResponse readyForPickup(AuthenticatedUser owner, Long orderId) {
         UsersOrders order = ownedByStoreOwner(owner, orderId);
-        order.readyForPickup();
+        order.readyForPickup(pickupCodes.issue());
         expiryIndex.register(order.getId(), order.getReadyAt().plus(properties.pickupTtl()));
-        // TODO(2.2 픽업 코드): 발급 후 응답에 포함
-        return OrderResponse.from(order);
+        return OrderResponse.forOwner(order);
     }
 
     @Transactional
-    public OrderResponse pickUp(AuthenticatedUser owner, Long orderId) {
+    public OrderResponse pickUp(AuthenticatedUser owner, Long orderId, String pickupCode) {
         UsersOrders order = ownedByStoreOwner(owner, orderId);
-        // TODO(2.2 픽업 코드): 요청의 코드와 대조
+        if (order.getOrderState() == OrderState.READY_FOR_PICKUP && !order.matchesPickupCode(pickupCode)) {
+            throw new OrderException.PickupCodeMismatch();
+        }
         order.pickUp();
         stock.settle(order);
         expiryIndex.remove(order.getId());
-        return OrderResponse.from(order);
+        return OrderResponse.forOwner(order);
+    }
+
+    @Transactional
+    public OrderResponse reject(AuthenticatedUser owner, Long orderId) {
+        UsersOrders order = ownedByStoreOwner(owner, orderId);
+        order.reject();
+        stock.restore(order);
+        return OrderResponse.forOwner(order);
     }
 
     @Transactional
@@ -139,8 +150,6 @@ public class OrderService {
         order.cancelUnapproved();
         stock.restore(order);
     }
-
-    // TODO(2.2 점주 취소): 점주가 PENDING 을 거절하는 경로. cancel 과 같은 전이지만 소유권 검사가 다르다
 
     // TODO(1.5 소유권 규약): 같은 패턴이 StoresItems·ItemsReviews 에도 반복되므로 규약을 정한 뒤 공통 위치로 옮긴다.
     //   타인의 주문에 403 을 줄지 404 로 숨길지도 그때 결정. 소비자 쪽(cancel)은 404 로 숨기고 있다
