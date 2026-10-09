@@ -17,9 +17,16 @@ spring:
       validation-timeout: 2000
       max-lifetime: 270000
 
+  flyway:
+    # 스키마는 ieum-domain 의 db/migration 이 관리한다. 두 서버가 같은 스크립트를 읽고, 동시에 떠도 Flyway 잠금으로 한쪽만 적용
+    locations: classpath:db/migration
+    # Flyway 도입 전부터 테이블이 있던 DB 는 V1(baseline) 을 건너뛰고 V2 부터 적용
+    baseline-on-migrate: true
+    baseline-version: 1
+
   jpa:
     hibernate:
-      ddl-auto: ${JPA_DDL_AUTO:update}
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     open-in-view: false
     properties:
       hibernate:
