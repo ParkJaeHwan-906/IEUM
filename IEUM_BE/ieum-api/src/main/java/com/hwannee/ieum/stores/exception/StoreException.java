@@ -27,12 +27,6 @@ public abstract class StoreException extends ApiException {
         }
     }
 
-    public static final class NotStoreOwner extends StoreException {
-        public NotStoreOwner() {
-            super(HttpStatus.FORBIDDEN, "해당 가게의 점주만 처리할 수 있습니다.");
-        }
-    }
-
     public static final class StoreShutdown extends StoreException {
         public StoreShutdown() {
             super(HttpStatus.CONFLICT, "영업 종료된 가게입니다.");
