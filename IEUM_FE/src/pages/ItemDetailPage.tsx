@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { getItem, getStore } from '../api/stores'
 import { createOrder, newIdempotencyKey } from '../api/orders'
@@ -17,7 +17,8 @@ export default function ItemDetailPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
-  const [idempotencyKey, setIdempotencyKey] = useState(() => newIdempotencyKey())
+  const idempotencyKey = useRef<string | null>(null)
+  const inFlight = useRef(false)
 
   const { data, loading, error: loadError, setData } = useAsync(
     async () => {
@@ -54,19 +55,29 @@ export default function ItemDetailPage() {
       navigate('/login', { state: { from: `/items/${itemUid}` } })
       return
     }
+    if (inFlight.current) return
+    inFlight.current = true
+    idempotencyKey.current ??= newIdempotencyKey()
     setSubmitting(true)
     setError(null)
     try {
-      await createOrder({ itemUid: item.itemUid, quantity: qty }, idempotencyKey)
+      await createOrder({ itemUid: item.itemUid, quantity: qty }, idempotencyKey.current)
       setData({ ...data!, item: { ...item, remainingQuantity: item.remainingQuantity - qty } })
-      setIdempotencyKey(newIdempotencyKey())
-      setToast('예약이 접수되었습니다. 점주 승인을 기다려 주세요.')
+      idempotencyKey.current = null
+      setToast('예약이 접수되었습니다. 점주가 5분 안에 승인하지 않으면 자동 취소됩니다.')
       setTimeout(() => navigate('/orders'), 900)
     } catch (e) {
       setError(messageOf(e))
     } finally {
+      inFlight.current = false
       setSubmitting(false)
     }
+  }
+
+  function changeQty(next: number) {
+    if (next === qty) return
+    idempotencyKey.current = null
+    setQty(next)
   }
 
   return (
@@ -123,11 +134,11 @@ export default function ItemDetailPage() {
                 <div className="qty">
                   <span style={{ fontWeight: 600 }}>수량</span>
                   <div className="qty__control">
-                    <button type="button" onClick={() => setQty((q) => Math.max(1, q - 1))} disabled={!canReserve || qty <= 1}>
+                    <button type="button" onClick={() => changeQty(Math.max(1, qty - 1))} disabled={!canReserve || qty <= 1}>
                       −
                     </button>
                     <span>{qty}</span>
-                    <button type="button" onClick={() => setQty((q) => Math.min(maxQty, q + 1))} disabled={!canReserve || qty >= maxQty}>
+                    <button type="button" onClick={() => changeQty(Math.min(maxQty, qty + 1))} disabled={!canReserve || qty >= maxQty}>
                       +
                     </button>
                   </div>
@@ -141,7 +152,7 @@ export default function ItemDetailPage() {
                   {soldOut ? '품절' : closed ? '예약 마감' : store.shutdown ? '영업 종료' : submitting ? '예약 중...' : user ? '예약하기' : '로그인하고 예약하기'}
                 </button>
                 <p style={{ margin: 0, fontSize: 12, color: 'var(--ink-500)', textAlign: 'center' }}>
-                  결제는 매장에서 픽업할 때 진행합니다. 1인 최대 {MAX_QTY}개까지 예약할 수 있어요.
+                  결제는 매장에서 픽업할 때 진행합니다. 상품당 진행 중인 예약은 1건, 최대 {MAX_QTY}개까지 예약할 수 있어요.
                 </p>
               </>
             )}
