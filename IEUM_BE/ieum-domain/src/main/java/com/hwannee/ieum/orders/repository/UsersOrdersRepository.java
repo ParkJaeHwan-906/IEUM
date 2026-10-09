@@ -2,6 +2,7 @@ package com.hwannee.ieum.orders.repository;
 
 import com.hwannee.ieum.orders.domain.OrderState;
 import com.hwannee.ieum.orders.domain.UsersOrders;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -47,6 +48,14 @@ public interface UsersOrdersRepository extends JpaRepository<UsersOrders, Long> 
             """)
     List<String> findAccountUidsByItemAndStates(@Param("itemId") Long itemId,
                                                 @Param("states") Collection<OrderState> states);
+
+    @Query("""
+            select o.id from UsersOrders o
+            where o.orderState = com.hwannee.ieum.orders.domain.OrderState.PENDING
+              and o.createdAt <= :threshold
+            order by o.id
+            """)
+    List<Long> findPendingIdsCreatedBefore(@Param("threshold") LocalDateTime threshold, Pageable pageable);
 
     // TODO(2.2 Reconciliation): Sorted Set 에서 누락된 만료 후보를 DB 기준으로 다시 찾는 용도
     @Query("""
