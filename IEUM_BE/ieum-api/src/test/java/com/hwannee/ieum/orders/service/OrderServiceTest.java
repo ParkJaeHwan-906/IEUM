@@ -243,7 +243,7 @@ class OrderServiceTest {
         UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 500L);
         order.approve();
         order.readyForPickup("123456");
-        given(orders.findById(500L)).willReturn(Optional.of(order));
+        given(orders.findByIdAndStoreOwnerUid(500L, USER_UID)).willReturn(Optional.of(order));
         AuthenticatedUser owner = new AuthenticatedUser(USER_UID, UserType.BUSINESS_OWNER, "nick");
 
         service.pickUp(owner, 500L, "123456");
@@ -279,7 +279,7 @@ class OrderServiceTest {
     void 준비_완료하면_픽업_코드를_발급하고_점주_응답에는_싣지_않는다() {
         UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 800L);
         order.approve();
-        given(orders.findById(800L)).willReturn(Optional.of(order));
+        given(orders.findByIdAndStoreOwnerUid(800L, USER_UID)).willReturn(Optional.of(order));
         given(pickupCodes.issue()).willReturn("482913");
 
         OrderResponse ownerView = service.readyForPickup(owner(), 800L);
@@ -303,7 +303,7 @@ class OrderServiceTest {
     @Test
     void 준비_전_주문의_픽업은_코드와_무관하게_상태_예외다() {
         UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 950L);
-        given(orders.findById(950L)).willReturn(Optional.of(order));
+        given(orders.findByIdAndStoreOwnerUid(950L, USER_UID)).willReturn(Optional.of(order));
 
         assertThatThrownBy(() -> service.pickUp(owner(), 950L, "000000"))
                 .isInstanceOf(InvalidOrderStateException.class);
@@ -312,7 +312,7 @@ class OrderServiceTest {
     @Test
     void 점주가_PENDING_을_거절하면_취소되고_재고를_복구한다() {
         UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 1000L);
-        given(orders.findById(1000L)).willReturn(Optional.of(order));
+        given(orders.findByIdAndStoreOwnerUid(1000L, USER_UID)).willReturn(Optional.of(order));
 
         OrderResponse response = service.reject(owner(), 1000L);
 
@@ -324,7 +324,7 @@ class OrderServiceTest {
     void 승인된_주문은_거절할_수_없다() {
         UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 1100L);
         order.approve();
-        given(orders.findById(1100L)).willReturn(Optional.of(order));
+        given(orders.findByIdAndStoreOwnerUid(1100L, USER_UID)).willReturn(Optional.of(order));
 
         assertThatThrownBy(() -> service.reject(owner(), 1100L))
                 .isInstanceOf(InvalidOrderStateException.class);
@@ -332,14 +332,25 @@ class OrderServiceTest {
     }
 
     @Test
-    void 다른_가게의_점주는_거절할_수_없다() {
-        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 1200L);
-        given(orders.findById(1200L)).willReturn(Optional.of(order));
+    void 다른_가게의_점주에게는_주문이_없는_것처럼_OrderNotFound() {
         AuthenticatedUser stranger = new AuthenticatedUser("other-owner", UserType.BUSINESS_OWNER, "nick");
+        given(orders.findByIdAndStoreOwnerUid(1200L, "other-owner")).willReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.reject(stranger, 1200L))
-                .isInstanceOf(OrderException.NotStoreOwner.class);
-        assertThat(order.getOrderState()).isEqualTo(OrderState.PENDING);
+        assertThatThrownBy(() -> service.approve(stranger, 1200L)).isInstanceOf(OrderException.OrderNotFound.class);
+        assertThatThrownBy(() -> service.readyForPickup(stranger, 1200L)).isInstanceOf(OrderException.OrderNotFound.class);
+        assertThatThrownBy(() -> service.pickUp(stranger, 1200L, "123456")).isInstanceOf(OrderException.OrderNotFound.class);
+        assertThatThrownBy(() -> service.reject(stranger, 1200L)).isInstanceOf(OrderException.OrderNotFound.class);
+        then(orders).should(never()).findById(anyLong());
+        then(stock).should(never()).restore(any());
+    }
+
+    @Test
+    void 다른_소비자의_주문은_취소할_수_없고_OrderNotFound() {
+        AuthenticatedUser stranger = new AuthenticatedUser("other-consumer", UserType.CONSUMER, "nick");
+        given(orders.findByIdAndUsersAccount_Uid(1300L, "other-consumer")).willReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.cancel(stranger, 1300L)).isInstanceOf(OrderException.OrderNotFound.class);
+        then(stock).should(never()).restore(any());
     }
 
     private AuthenticatedUser owner() {
@@ -350,7 +361,7 @@ class OrderServiceTest {
         UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, id);
         order.approve();
         order.readyForPickup(code);
-        given(orders.findById(id)).willReturn(Optional.of(order));
+        given(orders.findByIdAndStoreOwnerUid(id, USER_UID)).willReturn(Optional.of(order));
         return order;
     }
 
