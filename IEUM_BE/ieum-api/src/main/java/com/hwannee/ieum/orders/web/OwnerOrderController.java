@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-// 역할 검사는 여기(@PreAuthorize), 소유권 검사는 서비스 계층(OrderService.ownedByStoreOwner). ADR-0001 의 두 층
 @RestController
 @RequestMapping("/api/owner/orders")
 @PreAuthorize("hasRole('BUSINESS_OWNER')")
