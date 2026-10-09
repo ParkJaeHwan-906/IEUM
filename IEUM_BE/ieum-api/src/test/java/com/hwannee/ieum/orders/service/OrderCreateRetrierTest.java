@@ -204,7 +204,8 @@ class OrderCreateRetrierTest {
     private OrderCreateRetrier retrier(int maxAttempts) {
         OrderProperties properties = new OrderProperties(
                 Duration.ofMinutes(15), new OrderProperties.Retry(maxAttempts, Duration.ZERO),
-                new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5));
+                new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5),
+                Duration.ofMinutes(5));
         return new OrderCreateRetrier(orderService, new StockDeductionStrategy() {
             @Override
             public void deduct(Long itemId, int quantity) {
