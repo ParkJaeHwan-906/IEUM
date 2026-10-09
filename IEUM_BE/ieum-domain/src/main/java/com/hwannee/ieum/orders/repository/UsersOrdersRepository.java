@@ -25,6 +25,17 @@ public interface UsersOrdersRepository extends JpaRepository<UsersOrders, Long> 
 
     List<UsersOrders> findAllByUsersAccount_UidOrderByIdDesc(String uid);
 
+    List<UsersOrders> findAllByStoresItem_IdOrderByIdDesc(Long itemId);
+
+    List<UsersOrders> findAllByStoresItem_IdAndOrderStateOrderByIdDesc(Long itemId, OrderState state);
+
+    @Query("""
+            select count(o) > 0 from UsersOrders o
+            where o.storesItem.store.id = :storeId
+              and o.orderState in :states
+            """)
+    boolean existsByStoreAndStates(@Param("storeId") Long storeId, @Param("states") Collection<OrderState> states);
+
     Optional<UsersOrders> findByUsersAccount_IdAndIdempotencyKey(Long accountId, String idempotencyKey);
 
     Optional<UsersOrders> findByUsersAccount_UidAndIdempotencyKey(String uid, String idempotencyKey);
