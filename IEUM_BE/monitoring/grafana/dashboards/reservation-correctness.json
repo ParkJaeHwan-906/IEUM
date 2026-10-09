@@ -1,0 +1,1272 @@
+{
+  "uid": "ieum-reservation",
+  "title": "IEUM 예약 정합성",
+  "tags": [
+    "ieum",
+    "reservation"
+  ],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "version": 1,
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  },
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "title": "정합성 — 아래 빨간 칸은 기간 내 0 이어야 한다",
+      "id": 1,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "재고 불일치 (mismatch)",
+      "description": "Reconciliation 이 Redis 재고(stock:{itemId})·활성 예약 집합이 DB 기대값과 다르다고 본 횟수. 커밋 직전 주문과 엇갈리면 부하 중 일시적으로 오를 수 있어 주황. 같은 차이가 두 번 연속이면 corrected 로 이어진다.",
+      "id": 2,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 0,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(stock_reconciliation_total{job=\"ieum-api\", outcome=\"mismatch\"}[$__range])) or vector(0)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "재고 키 유실 (missing)",
+      "description": "Reconciliation 시점에 Redis 재고 키가 없던 횟수. 아직 warmup 전인 상품이거나 Redis 데이터 유실 신호.",
+      "id": 3,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(stock_reconciliation_total{job=\"ieum-api\", outcome=\"missing\"}[$__range])) or vector(0)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "자동 보정 (corrected)",
+      "description": "같은 차이가 두 번 연속 관측돼 Reconciliation 이 Redis 를 고친 횟수. 일시적 엇갈림이 아닌 진짜 어긋남이므로 반드시 0.",
+      "id": 4,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(stock_reconciliation_total{job=\"ieum-api\", outcome=\"corrected\"}[$__range])) or vector(0)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "재고 반환 실패 (release_failed)",
+      "description": "취소·만료 후 Redis 재고 반환이 실패한 횟수. 0 이 아니면 Reconciliation 이 보정하기 전까지 재고가 덜 팔린다.",
+      "id": 5,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(stock_redis_event_total{job=\"ieum-api\", event=\"release_failed\"}[$__range])) or vector(0)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "만료 처리 실패",
+      "description": "Expiry Worker 가 미픽업 만료를 처리하다 실패한 횟수.",
+      "id": 6,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(order_expiry_total{job=\"ieum-api\", outcome=\"failed\"}[$__range])) or vector(0)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "승인 타임아웃 실패",
+      "description": "PENDING 자동 취소 잡이 실패한 횟수.",
+      "id": 7,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 1
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(order_pending_timeout_total{job=\"ieum-api\", outcome=\"failed\"}[$__range])) or vector(0)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Reconciliation 결과 (/s)",
+      "description": "checked 는 평상시에도 오른다. mismatch·missing·corrected·requeued 는 0 에 붙어 있어야 한다.",
+      "id": 8,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(stock_reconciliation_total{job=\"ieum-api\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis 재고 이벤트 (/s)",
+      "description": "compensated: DB 커밋 실패로 Redis 차감을 되돌림. released: 취소·만료로 반환. release_failed 는 0 이어야 한다.",
+      "id": 9,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (event) (rate(stock_redis_event_total{job=\"ieum-api\"}[$__rate_interval]))",
+          "legendFormat": "{{event}}",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "만료 · 승인 타임아웃 결과 (/s)",
+      "description": "order.expiry(미픽업 만료)와 order.pending.timeout(미승인 자동 취소)의 outcome. failed 는 0 이어야 한다.",
+      "id": 10,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(order_expiry_total{job=\"ieum-api\"}[$__rate_interval]))",
+          "legendFormat": "expiry {{outcome}}",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (outcome) (rate(order_pending_timeout_total{job=\"ieum-api\"}[$__rate_interval]))",
+          "legendFormat": "pending.timeout {{outcome}}",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis 예약 판정 (/s, 누적)",
+      "description": "Lua 스크립트 판정 결과. reserved 합계가 판매 가능 재고를 넘으면 안 된다. sold_out·duplicate 는 정상 거절, replay 는 같은 멱등키 재요청, in_flight 는 앞 요청이 아직 커밋 전.",
+      "id": 11,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 16,
+        "x": 0,
+        "y": 13
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(stock_redis_reserve_total{job=\"ieum-api\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "기간 내 reserved 합계",
+      "description": "선택 기간 동안 Redis 가 예약을 허락한 총 횟수. 부하 테스트에서 상품 재고와 비교한다 (넘으면 초과 예약).",
+      "id": 12,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 13
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(increase(stock_redis_reserve_total{job=\"ieum-api\", outcome=\"reserved\"}[$__range])) or vector(0)",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value",
+        "justifyMode": "center",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "처리 — POST /api/orders",
+      "id": 13,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "요청률 by status (/s)",
+      "description": "주문 생성 요청 처리율. 409 는 품절·중복 예약 같은 정상 거절, 5xx 는 0 이어야 한다.",
+      "id": 14,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{job=\"ieum-api\", uri=\"/api/orders\", method=\"POST\"}[$__rate_interval]))",
+          "legendFormat": "{{status}}",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 30,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "응답 시간 (평균 · 최대)",
+      "description": "평균 = rate(_sum)/rate(_count). 최대 = 최근 스텝 내 최댓값(_max). 백분위는 히스토그램 버킷을 켜야 볼 수 있다 (가이드 참고).",
+      "id": 15,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_sum{job=\"ieum-api\", uri=\"/api/orders\", method=\"POST\"}[$__rate_interval])) / sum by (status) (rate(http_server_requests_seconds_count{job=\"ieum-api\", uri=\"/api/orders\", method=\"POST\"}[$__rate_interval]))",
+          "legendFormat": "avg {{status}}",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "B",
+          "expr": "max by (status) (http_server_requests_seconds_max{job=\"ieum-api\", uri=\"/api/orders\", method=\"POST\"})",
+          "legendFormat": "max {{status}}",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "주문 생성 시도 결과 (/s)",
+      "description": "success·exhausted 는 요청 단위, conflict·deadlock 은 실패한 시도 단위(재시도마다 1). optimistic·pessimistic 전략에서만 의미가 있다.",
+      "id": 16,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (outcome) (rate(order_create_attempts_total{job=\"ieum-api\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "B",
+          "expr": "sum(rate(order_create_attempts_used_sum{job=\"ieum-api\"}[$__rate_interval])) / sum(rate(order_create_attempts_used_count{job=\"ieum-api\"}[$__rate_interval]))",
+          "legendFormat": "성공까지 평균 시도 수",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "성공까지 평균 시도 수"
+            },
+            "properties": [
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              },
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "dash": [
+                    10,
+                    10
+                  ],
+                  "fill": "dash"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "title": "자원",
+      "id": 17,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 30
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "HikariCP 커넥션",
+      "description": "active 가 풀 크기(max)에 붙고 pending 이 쌓이면 DB 커넥션이 병목이다. redis 전략은 거절이 커넥션 없이 끝나 pending 이 낮아야 한다.",
+      "id": 18,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (job) (hikaricp_connections_active)",
+          "legendFormat": "{{job}} active",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (job) (hikaricp_connections_pending)",
+          "legendFormat": "{{job}} pending",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "C",
+          "expr": "sum by (job) (hikaricp_connections_max)",
+          "legendFormat": "{{job}} max",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "HikariCP 커넥션 획득 대기 (평균)",
+      "description": "커넥션 하나를 얻는 데 걸린 평균 시간 = rate(acquire_sum)/rate(acquire_count).",
+      "id": 19,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (job) (rate(hikaricp_connections_acquire_seconds_sum[$__rate_interval])) / sum by (job) (rate(hikaricp_connections_acquire_seconds_count[$__rate_interval]))",
+          "legendFormat": "{{job}} avg",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "B",
+          "expr": "max by (job) (hikaricp_connections_acquire_seconds_max)",
+          "legendFormat": "{{job}} max",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Redis Lua 스크립트 (평균 · 최대)",
+      "description": "stock.redis.script 타이머. 예약 판정 한 번의 왕복 시간.",
+      "id": 20,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 31
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum(rate(stock_redis_script_seconds_sum{job=\"ieum-api\"}[$__rate_interval])) / sum(rate(stock_redis_script_seconds_count{job=\"ieum-api\"}[$__rate_interval]))",
+          "legendFormat": "avg",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "B",
+          "expr": "max(stock_redis_script_seconds_max{job=\"ieum-api\"})",
+          "legendFormat": "max",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM 힙",
+      "description": "서버별 힙 사용량과 커밋량.",
+      "id": 21,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 39
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "sum by (job) (jvm_memory_used_bytes{area=\"heap\"})",
+          "legendFormat": "{{job}} used",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (job) (jvm_memory_committed_bytes{area=\"heap\"})",
+          "legendFormat": "{{job}} committed",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "스크레이프 상태",
+      "description": "1 = Prometheus 가 서버에 닿음, 0 = 서버가 꺼졌거나 /actuator/prometheus 가 막힘.",
+      "id": 22,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "ieum-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 39
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "ieum-prometheus"
+          },
+          "refId": "A",
+          "expr": "up{job=~\"ieum-api|ieum-auth\"}",
+          "legendFormat": "{{job}}",
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}
