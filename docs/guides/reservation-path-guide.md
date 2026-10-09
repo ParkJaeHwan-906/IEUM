@@ -19,6 +19,7 @@
 | 9 | `stock/RedisStockDeduction` | reserve · confirm · compensate · restore · settle · warmUp |
 | 10 | `resources/redis/stock-*.lua` | reserve(판정+차감), compensate(되돌리기), release(1회 복구), warmup(DB 상태로 채우기) |
 | 11 | `reconcile/StockReconciliationJob` | 두 번 연속 같은 어긋남만 정정, DB 투영 갱신, 만료 재등록 |
+| 11-1 | `expiry/PendingTimeoutJob` | 승인 없이 5분이 지난 PENDING 을 DB 에서 찾아 취소·재고 복구 (ADR-0004 8절) |
 | 12 | `ieum-domain` `UsersOrders` · `StoresItemsRepository` | `idempotency_key` + unique, `findByUidForUpdate` |
 
 테스트는 `src/test/.../orders/integration/OrderConcurrencyScenario` 하나를 읽으면 세 전략의 공통 요구가 보인다. 하위 클래스는 "중복 틈을 닫는가" 와 "원장을 어디서 읽는가" 만 다르다.
