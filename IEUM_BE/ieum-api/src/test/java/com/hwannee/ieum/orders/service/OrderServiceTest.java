@@ -48,6 +48,7 @@ class OrderServiceTest {
     private static final String ITEM_UID = "item-uid";
     private static final long ACCOUNT_ID = 1L;
     private static final long ITEM_ID = 10L;
+    private static final String KEY = "idem-key";
 
     @Mock
     UsersOrdersRepository orders;
@@ -65,7 +66,8 @@ class OrderServiceTest {
     ExpiryIndex expiryIndex;
 
     @Spy
-    OrderProperties properties = new OrderProperties(Duration.ofMinutes(15), new OrderProperties.Retry(3, Duration.ofMillis(10)));
+    OrderProperties properties = new OrderProperties(Duration.ofMinutes(15), new OrderProperties.Retry(3, Duration.ofMillis(10)),
+            new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5));
 
     @InjectMocks
     OrderService service;
@@ -84,6 +86,7 @@ class OrderServiceTest {
 
     @Test
     void 계정이_없으면_AccountNotFound() {
+        given(items.findByUid(ITEM_UID)).willReturn(Optional.of(item(LocalDateTime.now().plusHours(1))));
         given(accounts.findByUid(USER_UID)).willReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.create(user, request(1), null))
@@ -93,7 +96,6 @@ class OrderServiceTest {
 
     @Test
     void 상품이_없으면_ItemNotFound() {
-        given(accounts.findByUid(USER_UID)).willReturn(Optional.of(account));
         given(items.findByUid(ITEM_UID)).willReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.create(user, request(1), null))
@@ -165,6 +167,86 @@ class OrderServiceTest {
         assertThat(response.state()).isEqualTo(OrderState.PENDING);
     }
 
+    @Test
+    void 같은_멱등키의_주문이_있으면_차감하지_않고_그_주문을_돌려준다() {
+        StoresItems item = item(LocalDateTime.now().plusHours(1));
+        givenAccountAndItem(item);
+        UsersOrders previous = savedOrder(item, 2, 200L);
+        given(orders.findByUsersAccount_IdAndIdempotencyKey(ACCOUNT_ID, KEY)).willReturn(Optional.of(previous));
+
+        OrderResponse response = service.create(user, request(2), KEY);
+
+        assertThat(response.orderId()).isEqualTo(200L);
+        thenNothingDeductedOrSaved();
+    }
+
+    @Test
+    void 같은_멱등키를_다른_상품에_쓰면_IdempotencyKeyReused() {
+        givenAccountAndItem(item(LocalDateTime.now().plusHours(1)));
+        StoresItems other = new StoresItems(store, "other-item", null, "케이크", 5000, 3000, 100,
+                LocalDateTime.now().plusHours(1));
+        given(orders.findByUsersAccount_IdAndIdempotencyKey(ACCOUNT_ID, KEY))
+                .willReturn(Optional.of(savedOrder(other, 1, 300L)));
+
+        assertThatThrownBy(() -> service.create(user, request(1), KEY))
+                .isInstanceOf(OrderException.IdempotencyKeyReused.class);
+        thenNothingDeductedOrSaved();
+    }
+
+    @Test
+    void 행을_잠그는_전략이면_상품을_FOR_UPDATE_로_먼저_조회한다() {
+        StoresItems item = item(LocalDateTime.now().plusHours(1));
+        given(stock.locksItemRow()).willReturn(true);
+        given(items.findByUidForUpdate(ITEM_UID)).willReturn(Optional.of(item));
+        given(accounts.findByUid(USER_UID)).willReturn(Optional.of(account));
+        given(orders.save(any(UsersOrders.class))).willAnswer(invocation -> invocation.getArgument(0));
+
+        service.create(user, request(1), KEY);
+
+        then(items).should(never()).findByUid(any());
+        then(stock).should().deduct(ITEM_ID, 1);
+    }
+
+    @Test
+    void place_는_재고를_건드리지_않고_주문만_저장한다() {
+        StoresItems item = item(LocalDateTime.now().plusHours(1));
+        given(accounts.findByUid(USER_UID)).willReturn(Optional.of(account));
+        given(items.findById(ITEM_ID)).willReturn(Optional.of(item));
+        given(orders.save(any(UsersOrders.class))).willAnswer(invocation -> invocation.getArgument(0));
+
+        OrderResponse response = service.place(user, ITEM_ID, 2, KEY);
+
+        assertThat(response.quantity()).isEqualTo(2);
+        assertThat(response.state()).isEqualTo(OrderState.PENDING);
+        then(stock).should(never()).deduct(anyLong(), anyInt());
+    }
+
+    @Test
+    void 취소하면_주문_단위로_재고를_복구한다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 400L);
+        given(orders.findByIdAndUsersAccount_Uid(400L, USER_UID)).willReturn(Optional.of(order));
+
+        service.cancel(user, 400L);
+
+        assertThat(order.getOrderState()).isEqualTo(OrderState.CANCELED);
+        then(stock).should().restore(order);
+        then(expiryIndex).should().remove(400L);
+    }
+
+    @Test
+    void 픽업하면_재고는_복구하지_않고_settle_만_호출한다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 500L);
+        order.approve();
+        order.readyForPickup();
+        given(orders.findById(500L)).willReturn(Optional.of(order));
+        AuthenticatedUser owner = new AuthenticatedUser(USER_UID, UserType.BUSINESS_OWNER, "nick");
+
+        service.pickUp(owner, 500L);
+
+        then(stock).should().settle(order);
+        then(stock).should(never()).restore(any());
+    }
+
     private void givenAccountAndItem(StoresItems item) {
         given(accounts.findByUid(USER_UID)).willReturn(Optional.of(account));
         given(items.findByUid(ITEM_UID)).willReturn(Optional.of(item));
@@ -179,6 +261,12 @@ class OrderServiceTest {
         StoresItems item = new StoresItems(store, ITEM_UID, null, "빵", 5000, 3000, 100, lastOrderTime);
         ReflectionTestUtils.setField(item, "id", ITEM_ID);
         return item;
+    }
+
+    private UsersOrders savedOrder(StoresItems item, int quantity, long id) {
+        UsersOrders order = new UsersOrders(account, item, quantity, KEY);
+        ReflectionTestUtils.setField(order, "id", id);
+        return order;
     }
 
     private CreateOrderRequest request(int quantity) {
