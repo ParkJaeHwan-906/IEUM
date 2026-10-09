@@ -63,6 +63,27 @@ public class StoresItems extends BaseTimeEntity {
         this.lastOrderTime = lastOrderTime;
     }
 
+    public int heldQuantity() {
+        return initialQuantity - remainingQuantity;
+    }
+
+    public void changeInitialQuantity(int initialQuantity) {
+        if (initialQuantity < 0) {
+            throw new IllegalArgumentException("초기 수량은 0 이상이어야 합니다.");
+        }
+        int delta = initialQuantity - this.initialQuantity;
+        this.initialQuantity = initialQuantity;
+        this.remainingQuantity = Math.max(0, Math.min(initialQuantity, remainingQuantity + delta));
+    }
+
+    public boolean isSaleClosedAt(LocalDateTime now) {
+        return now.isAfter(lastOrderTime);
+    }
+
+    public void closeSale(LocalDateTime now) {
+        this.lastOrderTime = now;
+    }
+
     public void decreaseQuantity(int amount) {
         if (amount <= 0) {
             throw new IllegalArgumentException("차감 수량은 1 이상이어야 합니다.");
