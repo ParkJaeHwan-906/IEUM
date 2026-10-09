@@ -1,5 +1,6 @@
 package com.hwannee.ieum.orders.stock;
 
+import com.hwannee.ieum.orders.domain.UsersOrders;
 import com.hwannee.ieum.orders.exception.OrderException;
 import com.hwannee.ieum.stores.domain.StoresItems;
 import com.hwannee.ieum.stores.repository.StoresItemsRepository;
@@ -40,7 +41,9 @@ public class SynchronizedStockDeduction implements StockDeductionStrategy {
 
     @Override
     @Transactional
-    public void restore(Long itemId, int quantity) {
+    public void restore(UsersOrders order) {
+        Long itemId = order.getStoresItem().getId();
+        int quantity = order.getQuantity();
         StoresItems item = items.findById(itemId).orElseThrow(OrderException.ItemNotFound::new);
         int restored = Math.min(item.getRemainingQuantity() + quantity, item.getInitialQuantity());
         items.overwriteRemainingQuantity(itemId, restored);
