@@ -23,6 +23,25 @@ public interface StoresItemsRepository extends JpaRepository<StoresItems, Long> 
     @Query("select s from StoresItems s where s.id = :id")
     Optional<StoresItems> findByIdForUpdate(@Param("id") Long id);
 
+    @Query("""
+            select s from StoresItems s
+            where s.uid = :itemUid
+              and s.store.uid = :storeUid
+              and s.store.usersAccount.uid = :ownerUid
+            """)
+    Optional<StoresItems> findOwnedByUid(@Param("itemUid") String itemUid, @Param("storeUid") String storeUid,
+                                         @Param("ownerUid") String ownerUid);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select s from StoresItems s
+            where s.uid = :itemUid
+              and s.store.uid = :storeUid
+              and s.store.usersAccount.uid = :ownerUid
+            """)
+    Optional<StoresItems> findOwnedByUidForUpdate(@Param("itemUid") String itemUid, @Param("storeUid") String storeUid,
+                                                  @Param("ownerUid") String ownerUid);
+
     List<StoresItems> findAllByStore_UidOrderByIdDesc(String storeUid);
 
     // 1단계(잠금 없음) 전용. JPQL 벌크 UPDATE 는 @Version 검사를 거치지 않으므로
