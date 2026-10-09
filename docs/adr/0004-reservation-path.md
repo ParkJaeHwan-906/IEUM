@@ -109,6 +109,52 @@ DB 전략은 트랜잭션 안에서 키로 먼저 조회해 있으면 그 주문
 - **재고 복구는 기존 경로 그대로.** `stock.restore(order)` 라 redis 전략에서도 주문당 1회 가드를 탄다. 취소된 사용자는 다시 예약할 수 있다(활성 사용자 SET 에서 빠짐)
 - 상태는 `EXPIRED` 가 아니라 `CANCELED`. `EXPIRED` 는 "준비됐는데 안 가져감" 이라는 소비자 책임의 의미로 남겨 둔다
 
+### 9. 점주의 재고 조정·판매 종료·영업 종료 (2026-10-09 추가)
+
+`PATCH /api/owner/stores/{storeUid}/items/{itemUid}/quantity` 는 `initialQuantity` 를 바꾼다. 지켜야 할 것은 1번 불변식 하나다.
+
+```text
+initial = remaining + 잡힌 수량(활성 + 픽업 완료)
+새 initial ≥ 잡힌 수량   아니면 409 "이미 예약된 수량보다 적게 줄일 수 없습니다."
+remaining 은 initial 과 같은 폭(delta) 으로 움직인다
+```
+
+"잡힌 수량" 을 언제 읽느냐가 전부다. 읽은 뒤 바꾸기 전에 예약이 끼어들면 줄여도 되는지 판단이 틀린다. 그래서 전략마다 **예약 경로가 쓰는 원장과 같은 곳에서, 예약과 직렬화된 채로** 판단한다.
+`StockDeductionStrategy.adjust(lockedItem, initialQuantity)` 훅을 두고, `StoreItemService.adjustQuantity` 는 소유권 조건이 붙은 `findOwnedByUidForUpdate` 로 상품 행을 잠근 뒤 호출만 한다 (잠금이 트랜잭션 첫 문장, 1절과 같은 이유).
+
+**DB 전략 (`pessimistic`·`optimistic`·`conditional`, 기본 구현)** — 원장이 `stores_items.remaining_quantity` 다.
+
+- 잠근 행에서 `잡힌 수량 = initial − remaining` 을 읽고, 모자라면 `false` (→ 409), 아니면 `initial`·`remaining` 을 같은 폭으로 바꾼다
+- 잠금 읽기는 최신 커밋을 보므로 스냅샷 문제가 없다. 커밋까지 행 X 락을 쥐므로 그동안 예약은 기다린다
+  - `pessimistic` — 예약도 같은 행을 `FOR UPDATE` 로 잡으므로 순서대로 줄을 선다
+  - `optimistic` — 예약의 `UPDATE … WHERE version = ?` 는 락이 풀린 뒤 0행 → 충돌 → 재시도. 조정 쪽은 잠금으로 최신 version 을 읽었으므로 충돌하지 않는다
+  - `conditional` — `remaining >= ?` 조건부 UPDATE 가 락을 기다렸다가 바뀐 `remaining` 으로 판정한다
+- `naive`·`synchronized` 도 같은 기본 구현을 타지만, 원래 불변식을 보장하지 않는 비교용 전략이므로 결과도 보장하지 않는다
+
+**`redis`** — 원장이 `stock:{id}` 이고 DB 열은 투영이다. 판정을 Redis 에서 해야 Lua 를 통과했지만 아직 커밋되지 않은 예약까지 잡힌 수량에 들어간다.
+`stock-adjust.lua` 가 `GET` → `남은 수량 + delta < 0` 이면 `BELOW_HELD`, 아니면 `INCRBY delta` 를 한 번에 한다 (`stock-reserve.lua` 와 원자적으로 직렬화).
+문제는 Redis 와 DB 두 곳을 바꾼다는 것인데, **어느 쪽이 실패해도 덜 파는 방향으로만 틀리게** 순서를 정했다.
+
+| delta | 순서 | 실패하면 |
+|---|---|---|
+| 줄임 (< 0) | 트랜잭션 안에서 Lua 로 판정·차감 → DB `initial` 갱신 → 커밋 | 커밋 실패(롤백) 시 `afterCompletion(ROLLED_BACK)` 에서 뺀 만큼 다시 더해 되돌림. 되돌림까지 실패하면 Redis 가 적게 남아 덜 팔고, Reconciliation 이 정정 |
+| 늘림 (> 0) | DB `initial` 갱신 → 커밋 → `afterCommit` 에서 Lua `INCRBY` | 커밋 실패면 Redis 는 그대로. `INCRBY` 실패면 덜 팔고 `stock.redis.event{event=adjust_failed}` + Reconciliation 이 정정 |
+
+- 늘림을 커밋 전에 Redis 에 반영하면, 커밋이 실패했을 때 그 사이 팔린 수량이 `initial` 을 넘는다(초과 예약). 그래서 늘림은 커밋 뒤에만 반영한다
+- 줄임을 커밋 뒤에 반영하면, 그 사이 예약이 남은 수량을 다 가져가 줄일 수 없게 된다. 그래서 줄임은 커밋 전에 Lua 로 판정한다
+- **키가 없을 때.** 줄임은 5절 워밍업 후 다시 판정한다. 늘림도 **커밋 전에** 워밍업한다. 커밋 뒤에 키가 없으면 다른 요청의 워밍업이 새 `initial` 로 키를 만든 뒤 `INCRBY` 가 한 번 더 더해 초과 예약이 될 수 있기 때문이다 (늘림의 Lua 는 키가 없으면 아무것도 하지 않는다)
+- 조정끼리는 상품 행 잠금으로 직렬화된다. 앞선 늘림의 `afterCommit INCRBY` 보다 다음 줄임의 Lua 가 먼저 돌면 Redis 가 잠깐 적게 보여 줄임이 409 로 거절될 수 있다. 덜 파는 방향의 거짓 거절이고 다시 시도하면 된다
+- DB `remaining_quantity` 투영은 `remaining + delta` 를 `[0, initial]` 로 잘라 둔다. 정확한 값은 Reconciliation 이 기대값으로 덮는다. 조정 직후 Reconciliation 이 옛 `initial` 로 대조해도 "두 번 연속 같은 어긋남" 조건(6절) 때문에 정정하지 않는다
+
+**판매 종료** (`POST …/items/{itemUid}/close`) 는 별도 플래그 없이 `lastOrderTime` 을 지금으로 당긴다. 예약 생성의 판매 조건(`now > lastOrderTime` 이면 `ItemNotOnSale`) 을 그대로 쓰므로 새 분기가 없다. 이미 지났으면 409.
+상품 행을 잠그고 바꾸므로 `optimistic` 의 예약과는 version 충돌로 직렬화된다.
+
+**영업 종료** (`POST /api/owner/stores/{storeUid}/shutdown`) 는 가게의 상품 어디에든 활성 주문(PENDING·APPROVED·READY_FOR_PICKUP) 이 있으면 409 로 거부한다. 거절·재고 복구를 대신 해 주지 않는다 — 소비자에게 알리는 경로가 없는 상태에서 예약을 일방적으로 없애지 않는다.
+활성 주문 검사와 종료 사이에 들어온 예약은 막지 않는다(가게 행을 잠그지 않음). 종료 뒤 남은 그 예약은 평소대로 점주가 처리한다.
+
+**`ItemSaleCache` 무효화.** `redis` 경로의 판매 조건은 5초 캐시라, 판매 종료·영업 종료가 최대 5초 늦게 반영될 수 있다. 두 작업은 커밋 뒤(`afterCommit`) 해당 상품의 캐시 항목을 지운다.
+커밋 전에 지우면 그 사이 다른 요청이 옛 값을 다시 적재한다. 다만 인스턴스별 캐시라 **다른 인스턴스는 여전히 최대 5초 늦다** (남은 것 참고).
+
 ## 검증
 
 - 단위 테스트: `OrderServiceTest`(15), `RedisStockDeductionTest`(8), `PendingTimeoutJobTest`(4) 등 59건
@@ -119,6 +165,10 @@ DB 전략은 트랜잭션 안에서 키로 먼저 조회해 있으면 그 주문
   - 취소 → 재고 복구 → 같은 사용자 재예약 가능
   - redis 전용: 복구 두 번 → 1 회만, 키 유실 → DB 주문 상태로 워밍업해 중복을 여전히 거절, 두 번 연속 같은 어긋남만 정정, 사이에 값이 바뀌면 정정 안 함
   - 미승인 자동 취소: created_at 을 6분 전으로 돌린 PENDING 은 취소·재고 복구·재예약 가능, 같은 조건의 APPROVED 는 그대로 (세 전략 공통)
+  - 재고 조정 (9절, 세 전략 공통): 품절 후 늘리면 바로 예약 가능, 잡힌 수량보다 줄이면 409 이고 원장·`initial` 그대로, 잡힌 수량까지는 줄일 수 있음.
+    예약 40건과 조정 5건(늘림·줄임 섞어서) 을 동시에 보내도 `성공 ≤ initial`, `원장 = initial − 성공`
+  - 영업 종료는 활성 주문이 있으면 409, 정리 후 종료되면 곧바로 `ItemNotOnSale` (redis 는 캐시 무효화 확인). 판매 종료도 곧바로 `ItemNotOnSale`
+- 단위 테스트: `StockDeductionStrategyTest`(기본 구현), `RedisStockDeductionTest` 의 조정 6건(줄임 판정·롤백 되돌림, 거절, 키 없음 워밍업, 늘림은 커밋 뒤, 늘림 전 워밍업, 반영 실패 삼킴), `StoreServiceTest`, `StoreItemServiceTest`
 - 부하 측정: 아래 "측정 결과"
 
 ## 측정 결과
@@ -141,5 +191,5 @@ Redis 를 운영할 수 없는 환경이면 `pessimistic` 이 가장 단순하�
 ## 남은 것
 
 - 사용자당 활성 SET 은 상품별이라 "같은 사용자가 같은 키를 24시간 뒤 다른 활성 주문이 있는 상태에서 재사용" 하는 극단적 경우 보상의 `SREM` 이 활성 사용자를 지운다. Reconciliation 이 두 주기 뒤 되돌린다
-- 다중 인스턴스에서 `ItemSaleCache` 는 인스턴스별이다. 마감 시각·영업 종료 변경은 최대 TTL(5초) 늦게 반영된다
+- 다중 인스턴스에서 `ItemSaleCache` 는 인스턴스별이다. 판매 종료·영업 종료는 요청을 받은 인스턴스에서만 커밋 직후 무효화되고, 다른 인스턴스는 최대 TTL(5초) 늦게 반영된다 (Redis Pub/Sub 무효화 또는 TTL 단축, V3)
 - Reconciliation 은 아직 단일 인스턴스 가정. 여러 인스턴스가 동시에 정정하면 `INCRBY` 가 겹친다 → 리더 선출 또는 상품별 락 (V3)
