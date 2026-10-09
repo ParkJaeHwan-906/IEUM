@@ -7,7 +7,7 @@
 --   PowerShell: Get-Content -Raw -Encoding utf8 scripts/sql/seed-loadtest.sql | docker exec -i ieum-mysql mysql --default-character-set=utf8mb4 -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE>
 --   Git Bash:   docker exec -i ieum-mysql mysql --default-character-set=utf8mb4 -u root -p"<MYSQL_ROOT_PASSWORD>" <MYSQL_DATABASE> < scripts/sql/seed-loadtest.sql
 --   --default-character-set=utf8mb4 가 없으면 컨테이너 클라이언트가 latin1 로 떨어져 한글 INSERT 가 "Data too long for column" 으로 실패한다
--- 전제:  두 서버를 한 번 기동해 Hibernate(ddl-auto=update) 가 테이블을 만든 뒤에 실행한다.
+-- 전제:  두 서버 중 하나를 한 번 기동해 Flyway 가 테이블을 만든 뒤에 실행한다 (ieum-domain 의 db/migration).
 --
 -- 고정 값 (k6 스크립트에서 그대로 사용)
 --   점주   email owner@loadtest.ieum / password1 / account uid 11111111-1111-1111-1111-111111111111

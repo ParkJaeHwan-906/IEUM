@@ -62,6 +62,12 @@ public abstract class OrderException extends ApiException {
         }
     }
 
+    public static final class PickupCodeMismatch extends OrderException {
+        public PickupCodeMismatch() {
+            super(HttpStatus.BAD_REQUEST, "픽업 코드가 일치하지 않습니다.");
+        }
+    }
+
     public static final class ItemNotOnSale extends OrderException {
         public ItemNotOnSale() {
             super(HttpStatus.CONFLICT, "예약할 수 없는 상품입니다.");

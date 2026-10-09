@@ -108,7 +108,7 @@ ieum-api/      API 서버  — com.hwannee.ieum.auth.verify
   - `StoresItems` — 수정은 해당 `Stores` 의 점주만
   - `ItemsReviews` — 수정/삭제는 작성자만
   - `ReviewReports` — 처리는 ADMIN 만
-- [ ] **주문 생성 시 사용자 식별자는 요청 본문이 아닌 토큰에서 추출**
+- [x] **주문 생성 시 사용자 식별자는 요청 본문이 아닌 토큰에서 추출** — `CreateOrderRequest` 에 userId 없음, `@CurrentUser` 로만 받음 (2026-09-12 구현, 2026-10-09 체크)
   - 본문의 `userId` 를 신뢰하면 멱등 키 정책(`userId + Idempotency-Key`)이 무력화됨
 - [x] 인증된 사용자를 컨트롤러에 주입하는 방식 — `@CurrentUser AuthenticatedUser` (uid·role·nickname). permitAll 경로에서 쓰면 401
 
@@ -241,25 +241,26 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - [x] DB 투영 갱신 — 대조마다 `remaining_quantity = 기대값`. 워밍업은 이제 투영이 아니라 DB 주문 상태로 계산
   - [x] 만료 누락 탐지 — `findReadyForPickupBefore(now − PICKUP_TTL)` 를 `ExpiryIndex` 에 재등록
   - [x] 복구 상한 검사 — 기대값이 DB 주문 상태로 계산되므로 정정 자체가 상한을 지킨다. 전체 상품 순회는 100건 페이징
-- [ ] 픽업 코드 발급 및 검증
+- [x] 픽업 코드 발급 및 검증 (2026-10-09) — `readyForPickup` 시 `PickupCodeIssuer`(SecureRandom 6자리) 로 발급해 `users_orders.pickup_code` 에 저장. 소비자 조회 응답에만 싣고 점주 응답(`OrderResponse.forOwner`) 에는 싣지 않음. `POST /api/owner/orders/{id}/pickup` 본문 `{ pickupCode }`, 불일치 400 `PickupCodeMismatch`, 비교는 `MessageDigest.isEqual`
+- [x] 점주 거절 (2026-10-09) — `POST /api/owner/orders/{id}/reject`. PENDING 에서만 허용, `CANCELED` + 재고 복구 (README 의 CANCELED 정의 "사용자 또는 점주 취소" 를 따름)
 
 ---
 
 ## 3. 공통
 
-- [ ] 전역 예외 처리 (`@RestControllerAdvice` + `ProblemDetail`)
-- [ ] 요청/응답 DTO 및 검증 (`spring-boot-starter-validation` 의존성 추가 필요)
+- [x] 전역 예외 처리 (`@RestControllerAdvice` + `ProblemDetail`) — `common/web/ApiExceptionAdvice` (ApiException·상태 전이 409·동시성 503). 401/403 쪽 `SecurityExceptionAdvice` 와 합칠지는 미결 (코드 TODO)
+- [x] 요청/응답 DTO 및 검증 — `spring-boot-starter-validation` 추가됨, 요청 DTO 에 Bean Validation 적용
 - [ ] API 문서화 — OpenAPI vs Spring REST Docs
   - [x] 인증 API 명세는 우선 Notion 에 수기 작성 (이음 > API 명세서, 2026-09-10). 예약·상품 API 구현 시 이어서 추가
   - 코드 기반 문서 도구 도입 여부는 예약 도메인 착수 후 결정
-- [ ] `JPA_DDL_AUTO` 를 `validate` 로 전환하고 스키마 마이그레이션 도구 도입 검토 (Flyway)
+- [x] `JPA_DDL_AUTO` 를 `validate` 로 전환하고 Flyway 도입 (2026-10-09) — 마이그레이션은 `ieum-domain/src/main/resources/db/migration` (두 서버 공유). V1 기준선, V2 픽업 코드·미승인 조회 인덱스. 기존 DB 는 `baseline-on-migrate` 로 V1 을 건너뜀. Testcontainers 통합 테스트도 `validate` 로 돌려 마이그레이션과 엔티티 불일치를 잡음. [ADR-0005](./adr/0005-schema-migration.md)
 - [x] Testcontainers 기반 통합 테스트 (2026-10-09) — `ieum-api` / `orders/integration/`. MySQL 8.4 + Redis 7.4, 세 전략이 `OrderConcurrencyScenario` 상속, Docker 없으면 건너뜀
 
 ---
 
 ## 4. 관측 및 확장
 
-- [ ] Actuator + Micrometer
+- [x] Actuator + Micrometer — `/actuator/prometheus` 노출, 예약·재고·만료·Reconciliation 카운터 (2026-09-14 ~ 10-09)
 - [ ] Prometheus / Grafana
 - [ ] 불변식 검증 지표 — 초과 예약 0건, 재고 복구 1회
 - [x] k6 부하 테스트 시나리오 (재고 100 / 요청 10,000) — `IEUM_BE/scripts/k6/create-order.js` (2026-09-12). 로그인은 `setup()` 에서 `http.batch` 로 병렬 처리, `shared-iterations` 로 소비자 1인 1요청

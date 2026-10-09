@@ -14,9 +14,18 @@ public record OrderResponse(
         int orderPrice,
         OrderState state,
         LocalDateTime readyAt,
+        String pickupCode,
         LocalDateTime createdAt
 ) {
     public static OrderResponse from(UsersOrders order) {
+        return of(order, order.getPickupCode());
+    }
+
+    public static OrderResponse forOwner(UsersOrders order) {
+        return of(order, null);
+    }
+
+    private static OrderResponse of(UsersOrders order, String pickupCode) {
         return new OrderResponse(
                 order.getId(),
                 order.getStoresItem().getUid(),
@@ -25,6 +34,7 @@ public record OrderResponse(
                 order.getOrderPrice(),
                 order.getOrderState(),
                 order.getReadyAt(),
+                pickupCode,
                 order.getCreatedAt()
         );
     }

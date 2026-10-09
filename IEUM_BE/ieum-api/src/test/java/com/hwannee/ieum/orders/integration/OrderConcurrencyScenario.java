@@ -44,6 +44,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SpringBootTest
 abstract class OrderConcurrencyScenario extends ContainersSupport {
@@ -192,6 +193,42 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
         assertThat(ledgerRemaining(item)).isZero();
     }
 
+    @Test
+    void 승인_준비_픽업까지_픽업_코드로_완료하고_재고는_돌아오지_않는다() {
+        StoresItems item = item(STOCK);
+        AuthenticatedUser owner = ownerOf(item);
+        AuthenticatedUser consumer = consumers(1).getFirst();
+        OrderResponse created = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+
+        orderService.approve(owner, created.orderId());
+        OrderResponse ready = orderService.readyForPickup(owner, created.orderId());
+        String code = orderService.findMine(consumer).getFirst().pickupCode();
+
+        assertThat(ready.pickupCode()).isNull();
+        assertThat(code).matches("[0-9]{6}");
+        String wrong = code.equals("000000") ? "111111" : "000000";
+        assertThatThrownBy(() -> orderService.pickUp(owner, created.orderId(), wrong))
+                .isInstanceOf(OrderException.PickupCodeMismatch.class);
+        assertThat(orderService.pickUp(owner, created.orderId(), code).state()).isEqualTo(OrderState.PICKED_UP);
+        assertThat(ledgerRemaining(item)).isEqualTo(STOCK - 1);
+        assertThat(send(consumer, item, UUID.randomUUID().toString())).isEqualTo(Result.CREATED);
+    }
+
+    @Test
+    void 점주가_거절하면_재고가_돌아오고_다시_예약할_수_있다() {
+        StoresItems item = item(1);
+        AuthenticatedUser owner = ownerOf(item);
+        AuthenticatedUser consumer = consumers(1).getFirst();
+        OrderResponse created = creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), UUID.randomUUID().toString());
+
+        OrderResponse rejected = orderService.reject(owner, created.orderId());
+
+        assertThat(rejected.state()).isEqualTo(OrderState.CANCELED);
+        assertThat(ledgerRemaining(item)).isEqualTo(1);
+        assertThat(send(consumer, item, UUID.randomUUID().toString())).isEqualTo(Result.CREATED);
+        assertThat(ledgerRemaining(item)).isZero();
+    }
+
     Result send(AuthenticatedUser consumer, StoresItems item, String key) {
         try {
             creator.create(consumer, new CreateOrderRequest(item.getUid(), 1), key);
@@ -215,6 +252,11 @@ abstract class OrderConcurrencyScenario extends ContainersSupport {
                 LocalTime.of(0, 0), LocalTime.of(23, 59)));
         return items.save(new StoresItems(store, UUID.randomUUID().toString(), null, "빵", 5000, 3000, stock,
                 LocalDateTime.now().plusDays(1)));
+    }
+
+    AuthenticatedUser ownerOf(StoresItems item) {
+        UsersAccount owner = item.getStore().getUsersAccount();
+        return new AuthenticatedUser(owner.getUid(), UserType.BUSINESS_OWNER, owner.getNickname());
     }
 
     List<AuthenticatedUser> consumers(int count) {

@@ -66,6 +66,9 @@ class OrderServiceTest {
     @Mock
     ExpiryIndex expiryIndex;
 
+    @Mock
+    PickupCodeIssuer pickupCodes;
+
     @Spy
     OrderProperties properties = new OrderProperties(Duration.ofMinutes(15), new OrderProperties.Retry(3, Duration.ofMillis(10)),
             new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5),
@@ -239,11 +242,11 @@ class OrderServiceTest {
     void 픽업하면_재고는_복구하지_않고_settle_만_호출한다() {
         UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 500L);
         order.approve();
-        order.readyForPickup();
+        order.readyForPickup("123456");
         given(orders.findById(500L)).willReturn(Optional.of(order));
         AuthenticatedUser owner = new AuthenticatedUser(USER_UID, UserType.BUSINESS_OWNER, "nick");
 
-        service.pickUp(owner, 500L);
+        service.pickUp(owner, 500L, "123456");
 
         then(stock).should().settle(order);
         then(stock).should(never()).restore(any());
@@ -270,6 +273,85 @@ class OrderServiceTest {
                 .isInstanceOf(InvalidOrderStateException.class);
         assertThat(order.getOrderState()).isEqualTo(OrderState.APPROVED);
         then(stock).should(never()).restore(any());
+    }
+
+    @Test
+    void 준비_완료하면_픽업_코드를_발급하고_점주_응답에는_싣지_않는다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 800L);
+        order.approve();
+        given(orders.findById(800L)).willReturn(Optional.of(order));
+        given(pickupCodes.issue()).willReturn("482913");
+
+        OrderResponse ownerView = service.readyForPickup(owner(), 800L);
+
+        assertThat(order.getPickupCode()).isEqualTo("482913");
+        assertThat(ownerView.pickupCode()).isNull();
+        assertThat(OrderResponse.from(order).pickupCode()).isEqualTo("482913");
+    }
+
+    @Test
+    void 픽업_코드가_틀리면_PickupCodeMismatch_이고_상태는_그대로다() {
+        UsersOrders order = readyOrder(900L, "482913");
+
+        assertThatThrownBy(() -> service.pickUp(owner(), 900L, "000000"))
+                .isInstanceOf(OrderException.PickupCodeMismatch.class);
+        assertThat(order.getOrderState()).isEqualTo(OrderState.READY_FOR_PICKUP);
+        then(stock).should(never()).settle(any());
+        then(expiryIndex).should(never()).remove(anyLong());
+    }
+
+    @Test
+    void 준비_전_주문의_픽업은_코드와_무관하게_상태_예외다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 950L);
+        given(orders.findById(950L)).willReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.pickUp(owner(), 950L, "000000"))
+                .isInstanceOf(InvalidOrderStateException.class);
+    }
+
+    @Test
+    void 점주가_PENDING_을_거절하면_취소되고_재고를_복구한다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 1000L);
+        given(orders.findById(1000L)).willReturn(Optional.of(order));
+
+        OrderResponse response = service.reject(owner(), 1000L);
+
+        assertThat(response.state()).isEqualTo(OrderState.CANCELED);
+        then(stock).should().restore(order);
+    }
+
+    @Test
+    void 승인된_주문은_거절할_수_없다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 1100L);
+        order.approve();
+        given(orders.findById(1100L)).willReturn(Optional.of(order));
+
+        assertThatThrownBy(() -> service.reject(owner(), 1100L))
+                .isInstanceOf(InvalidOrderStateException.class);
+        then(stock).should(never()).restore(any());
+    }
+
+    @Test
+    void 다른_가게의_점주는_거절할_수_없다() {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, 1200L);
+        given(orders.findById(1200L)).willReturn(Optional.of(order));
+        AuthenticatedUser stranger = new AuthenticatedUser("other-owner", UserType.BUSINESS_OWNER, "nick");
+
+        assertThatThrownBy(() -> service.reject(stranger, 1200L))
+                .isInstanceOf(OrderException.NotStoreOwner.class);
+        assertThat(order.getOrderState()).isEqualTo(OrderState.PENDING);
+    }
+
+    private AuthenticatedUser owner() {
+        return new AuthenticatedUser(USER_UID, UserType.BUSINESS_OWNER, "nick");
+    }
+
+    private UsersOrders readyOrder(long id, String code) {
+        UsersOrders order = savedOrder(item(LocalDateTime.now().plusHours(1)), 1, id);
+        order.approve();
+        order.readyForPickup(code);
+        given(orders.findById(id)).willReturn(Optional.of(order));
+        return order;
     }
 
     private void givenAccountAndItem(StoresItems item) {

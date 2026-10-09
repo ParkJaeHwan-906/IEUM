@@ -165,9 +165,9 @@ Kafka를 예약 요청 대기열로 사용해 순간적으로 몰린 트래픽�
 stateDiagram-v2
     [*] --> PENDING: 예약 성공 및 재고 차감
     PENDING --> APPROVED: 점주 승인
-    APPROVED --> READY_FOR_PICKUP: 준비 완료 (readyAt 기록)
-    READY_FOR_PICKUP --> PICKED_UP: 픽업 완료
-    PENDING --> CANCELED: 취소 및 재고 복구
+    APPROVED --> READY_FOR_PICKUP: 준비 완료 (readyAt 기록, 픽업 코드 발급)
+    READY_FOR_PICKUP --> PICKED_UP: 픽업 코드 확인 후 픽업 완료
+    PENDING --> CANCELED: 사용자 취소, 점주 거절, 5분 미승인 자동 취소. 재고 복구
     APPROVED --> CANCELED: 취소 및 재고 복구
     READY_FOR_PICKUP --> CANCELED: 취소 및 재고 복구
     READY_FOR_PICKUP --> EXPIRED: readyAt + 15분 미픽업, 재고 복구
@@ -178,16 +178,20 @@ stateDiagram-v2
 
 | 상태 | 의미 | 재고 |
 |---|---|---|
-| PENDING | 예약 접수, 점주 승인 대기 | 차감됨 |
+| PENDING | 예약 접수, 점주 승인 대기. 5분 안에 승인되지 않으면 자동 취소 | 차감됨 |
 | APPROVED | 점주 승인 | 차감됨 |
-| READY_FOR_PICKUP | 준비 완료, 픽업 대기. 이 시점부터 15분 카운트 | 차감됨 |
+| READY_FOR_PICKUP | 준비 완료, 픽업 대기. 6자리 픽업 코드 발급, 이 시점부터 15분 카운트 | 차감됨 |
 | PICKED_UP | 픽업 완료 | 소진 확정 |
-| CANCELED | 사용자 또는 점주 취소 | 복구 |
+| CANCELED | 사용자 취소, 점주 거절, 미승인 자동 취소 | 복구 |
 | EXPIRED | 준비 완료 후 15분 내 미픽업 (노쇼) | 복구 |
 
 PICKED_UP, CANCELED, EXPIRED는 최종 상태입니다. 같은 명령이 반복되더라도 상태와 재고를 추가로 변경하지 않으며, 재고 복구는 예약당 정확히 한 번만 일어납니다.
 
-EXPIRED는 노쇼를 막고 재고 회전을 빠르게 하기 위한 제약입니다. 만료 시각은 점주가 준비 완료 처리한 시점을 기준으로 하며, 상품의 `lastOrderTime`과는 무관합니다. PENDING과 APPROVED에는 자동 만료가 없습니다.
+EXPIRED는 노쇼를 막고 재고 회전을 빠르게 하기 위한 제약입니다. 만료 시각은 점주가 준비 완료 처리한 시점을 기준으로 하며, 상품의 `lastOrderTime`과는 무관합니다.
+
+PENDING은 점주가 5분(`APPROVAL_TIMEOUT`) 안에 승인하지 않으면 CANCELED로 바뀌고 재고가 복구됩니다. 점주가 응답하지 않아 재고가 잠기는 것을 막기 위한 제약이며, 노쇼가 아니라 가게 쪽 사유이므로 EXPIRED와 구분합니다. APPROVED에는 자동 만료가 없습니다.
+
+픽업 코드는 준비 완료 시 발급되는 6자리 숫자입니다. 소비자는 내 예약 조회에서 확인하고, 점주는 수령 시 소비자에게 받은 코드를 입력해 픽업을 완료합니다. 점주용 응답에는 코드를 싣지 않습니다.
 
 ## Idempotency Policy
 

@@ -46,7 +46,7 @@ class OrderCreateRetrierTest {
         registry = new SimpleMeterRegistry();
         user = new AuthenticatedUser("consumer-uid", UserType.CONSUMER, "nick");
         request = new CreateOrderRequest(ITEM_UID, 1);
-        response = new OrderResponse(100L, ITEM_UID, "빵", 1, 3000, OrderState.PENDING, null, null);
+        response = new OrderResponse(100L, ITEM_UID, "빵", 1, 3000, OrderState.PENDING, null, null, null);
     }
 
     @Test
