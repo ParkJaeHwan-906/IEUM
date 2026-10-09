@@ -3,6 +3,9 @@ package com.hwannee.ieum.auth.verify.config;
 import com.hwannee.ieum.auth.verify.principal.CurrentUserArgumentResolver;
 import com.hwannee.ieum.auth.verify.web.ProblemDetailAuthHandlers;
 import com.hwannee.ieum.auth.verify.web.SecurityExceptionAdvice;
+import com.hwannee.ieum.stores.service.StoreItemService;
+import com.hwannee.ieum.stores.service.StoreService;
+import com.hwannee.ieum.stores.web.StoreController;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +20,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
+import java.util.List;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.not;
@@ -27,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest(controllers = ProbeController.class)
+@WebMvcTest(controllers = {ProbeController.class, StoreController.class})
 @Import({SecurityConfig.class, CorsConfig.class, WebMvcSecurityConfig.class, CurrentUserArgumentResolver.class,
         ProblemDetailAuthHandlers.class, SecurityExceptionAdvice.class})
 class SecurityConfigTest {
@@ -42,6 +46,12 @@ class SecurityConfigTest {
     @MockitoBean
     JwtDecoder jwtDecoder;
 
+    @MockitoBean
+    StoreService storeService;
+
+    @MockitoBean
+    StoreItemService storeItemService;
+
     @BeforeEach
     void stubDecoder() {
         given(jwtDecoder.decode(CONSUMER_TOKEN)).willReturn(jwt("uid-consumer", "CONSUMER", "소비자"));
@@ -54,6 +64,15 @@ class SecurityConfigTest {
         mockMvc.perform(get("/api/items/1"))
                 .andExpect(status().isOk())
                 .andExpect(content().string("item"));
+    }
+
+    @Test
+    void storeListWithoutTrailingPathIsOpenWithoutToken() throws Exception {
+        given(storeService.findOpen()).willReturn(List.of());
+
+        mockMvc.perform(get("/api/stores"))
+                .andExpect(status().isOk())
+                .andExpect(content().json("[]"));
     }
 
     @Test
