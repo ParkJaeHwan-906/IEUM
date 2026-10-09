@@ -13,9 +13,6 @@ import org.springframework.stereotype.Component;
 import java.time.LocalDateTime;
 
 // READY_FOR_PICKUP 진입 후 PICKUP_TTL 이 지난 주문을 EXPIRED 로 전이하고 재고를 복구한다.
-// TODO(2.2 복구 멱등성): 같은 id 가 두 번 처리되면(워커 중복 실행, 크래시 후 재시도) restore 가 두 번 나간다.
-//   expire 전이는 상태 가드로 1회지만 restore 는 아니다. restore 시그니처에 orderId 를 더하고 restored:{orderId} SETNX 로 막는다
-// TODO(2.2 Reconciliation): 인덱스에 없는데 DB 는 READY_FOR_PICKUP 이고 readyAt 이 지난 주문은 여기서 못 본다. findReadyForPickupBefore 로 잡는 것은 Reconciliation 의 몫
 @Component
 public class ExpiryWorker {
 
