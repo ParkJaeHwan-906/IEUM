@@ -97,7 +97,6 @@ public class OrderService {
         UsersOrders order = ownedByConsumer(user, orderId);
         order.cancel();
         stock.restore(order);
-        expiryIndex.remove(order.getId());
         return OrderResponse.from(order);
     }
 
