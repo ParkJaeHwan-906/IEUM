@@ -10,7 +10,7 @@ IEUM 백엔드 작업 목록. 완료된 항목은 체크하고, 배경 설명이
 - [x] 로컬 개발 환경 (Docker Compose - MySQL 8.4, Redis 7.4)
 - [x] 환경변수 외부화 (`.env` + `application.yaml` 플레이스홀더)
 - [x] 인증/인가 — 인증 서버 분리, 단위 테스트, Postman 통합 확인, ADR-0002 (2026-09-12 완료)
-- [~] **예약 도메인 로직** ← 현재 단계 (2026-10-09 생성 경로 완성: 비관적·낙관적·Redis Lua 통합 판정, 멱등키, 1회 복구, Reconciliation 정정. 남은 것은 점주 거절·픽업 코드·정책 결정)
+- [~] **예약 도메인 로직** ← 현재 단계 (2026-10-09 생성 경로 완성: 비관적·낙관적·Redis Lua 통합 판정, 멱등키, 1회 복구, Reconciliation 정정. 이어서 소유권 404 규약·소비자 취소 정책·점주 기능(영업 시간·영업 종료·재고 조정·판매 종료·상품별 예약 현황)·공개 가게 목록)
 - [ ] 부하 테스트 및 관측
 - [ ] V2 - Kafka 예약 대기열
 - [ ] V3 - Kubernetes Scale-out
@@ -101,13 +101,16 @@ ieum-api/      API 서버  — com.hwannee.ieum.auth.verify
 ### 1.5 인가
 
 - [x] `@EnableMethodSecurity` 활성화 (API 서버 `SecurityConfig`)
-- [ ] 역할 검사 — `@PreAuthorize` 로 BUSINESS_OWNER 전용 API 제한
-  - 상품 등록/수정/삭제, 주문 승인, 픽업 완료 처리
-- [ ] 소유권 검사를 서비스 계층 규약으로 정립
-  - `UsersOrders` — 취소/조회는 본인만
-  - `StoresItems` — 수정은 해당 `Stores` 의 점주만
-  - `ItemsReviews` — 수정/삭제는 작성자만
-  - `ReviewReports` — 처리는 ADMIN 만
+- [x] 역할 검사 — `@PreAuthorize` 로 BUSINESS_OWNER 전용 API 제한 (2026-10-09)
+  - `OwnerStoreController`·`OwnerOrderController` 는 클래스 레벨 `hasRole('BUSINESS_OWNER')`, `OrderController` 는 클래스 레벨 `hasRole('CONSUMER')` (생성·내 예약 조회·취소 전부)
+- [x] 소유권 검사를 서비스 계층 규약으로 정립 (2026-10-09) — **남의 리소스는 어디서든 404** (존재를 숨김). 403 은 역할 불일치에만. [ADR-0001 추가 결정](./adr/0001-authentication.md#추가-결정-2026-10-09--소유권-규약과-404)
+  - 규약: 엔티티를 id 로 꺼낸 뒤 비교하지 않고, **소유자 uid 를 조건에 넣은 조회 하나** 로 찾는다. 없으면 NotFound
+  - `UsersOrders` — 소비자 `findByIdAndUsersAccount_Uid`, 점주 `findByIdAndStoreOwnerUid`. 남의 주문은 `OrderNotFound`
+  - `Stores` — `findByUidAndUsersAccount_Uid`. 남의 가게는 `StoreNotFound`
+  - `StoresItems` — `findOwnedByUid`(·`ForUpdate`) 가 상품 uid·가게 uid·점주 uid 를 함께 조건으로. 남의 상품은 `ItemNotFound`
+  - `OrderException.NotStoreOwner`·`StoreException.NotStoreOwner`(403) 삭제
+  - [ ] `ItemsReviews` — 수정/삭제는 작성자만 (리뷰 API 구현 시 같은 규약)
+  - [ ] `ReviewReports` — 처리는 ADMIN 만
 - [x] **주문 생성 시 사용자 식별자는 요청 본문이 아닌 토큰에서 추출** — `CreateOrderRequest` 에 userId 없음, `@CurrentUser` 로만 받음 (2026-09-12 구현, 2026-10-09 체크)
   - 본문의 `userId` 를 신뢰하면 멱등 키 정책(`userId + Idempotency-Key`)이 무력화됨
 - [x] 인증된 사용자를 컨트롤러에 주입하는 방식 — `@CurrentUser AuthenticatedUser` (uid·role·nickname). permitAll 경로에서 쓰면 401
@@ -139,7 +142,8 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - 잘못된 토큰 모킹은 `BadJwtException` 이어야 함. `JwtException` 은 `AuthenticationServiceException` 으로 감싸져 경로가 다름
   - `@WebMvcTest` 는 `@Configuration`·`@Component` 를 스캔하지 않으므로 `SecurityConfig`·`ProblemDetailAuthHandlers` 는 `@Import` 필수
   - Spring Boot 4: `@WebMvcTest` 는 `org.springframework.boot.webmvc.test.autoconfigure`, `@MockitoBean` 은 `org.springframework.test.context.bean.override.mockito`
-- [ ] 타인의 리소스 접근 시 403 — 소유권 검사(1.5) 구현 후
+- [x] 타인의 리소스 접근 시 **404** (2026-10-09, 403 에서 정책 변경) — `OrderServiceTest`·`StoreServiceTest`·`StoreItemServiceTest` 단위, `OrderConcurrencyScenario` 통합(다른 점주 승인·거절, 다른 소비자 취소 → `OrderNotFound`, 상태·재고 그대로)
+- [x] 역할 불일치 403 — `RoleAccessTest` (`@WebMvcTest` + `JwtDecoder` 모킹, 실제 컨트롤러). 소비자 토큰 → 점주 API, 점주 토큰 → 소비자 API 가 403 이고 서비스 미호출
 
 ---
 
@@ -148,7 +152,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 ### 2.1 선결 과제
 
 - [x] 예약 상태 모델 — **점주 승인 절차를 유지한다** (2026-09-12 결정). 코드의 `OrderState` 가 기준이고 README 를 코드에 맞춘다
-  - 코드: `PENDING → APPROVED → READY_FOR_PICKUP → PICKED_UP`, 어디서든 `CANCELED`
+  - 코드: `PENDING → APPROVED → READY_FOR_PICKUP → PICKED_UP`, `CANCELED` 는 PENDING·APPROVED 에서만 (소비자 취소 정책, 2.2)
   - [x] `EXPIRED` 위치 — **`READY_FOR_PICKUP` 진입 후 15분 미픽업** (2026-09-12 결정). 노쇼 방지와 빠른 회전이 목적이며 만료 시 재고를 복구한다
     - `lastOrderTime` 과는 무관. `PENDING` 과 `APPROVED` 에는 만료가 없고 점주의 승인·취소로만 빠져나간다
     - [x] 미승인 `PENDING` 은 **5분 안에 다음 상태로 전이되지 않으면 자동 취소** (2026-10-09 결정·구현). `PendingTimeoutJob` 이 10초마다 `created_at <= now − APPROVAL_TIMEOUT` 인 PENDING 을 DB 에서 찾아 `CANCELED` + 재고 복구. 인덱스 `(order_state, created_at)`. [ADR-0004 8절](./adr/0004-reservation-path.md)
@@ -209,10 +213,19 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
       - 부수 관찰: 주문 `order_price` 5,000 — 확인 결과 시드의 `sale_price` 가 5,000(`original_price` 10,000) 이라 정상. `UsersOrders` 생성자는 `salePrice` 를 쓰고 `OrderServiceTest` 가 단언 (2026-10-09)
 - [~] 가게·상품 API — 뼈대 생성 (2026-09-12). `ieum-api` / `stores/` 아래 `exception`·`service`·`web`
   - 점주: `POST /api/owner/stores`, `GET /api/owner/stores/me`, `POST /api/owner/stores/{storeUid}/items` (`OwnerStoreController`, BUSINESS_OWNER)
-  - 공개: `GET /api/stores/{storeUid}`, `GET /api/stores/{storeUid}/items`, `GET /api/items/{itemUid}` (permitAll 경로)
+  - 공개: `GET /api/stores`, `GET /api/stores/{storeUid}`, `GET /api/stores/{storeUid}/items`, `GET /api/items/{itemUid}` (permitAll 경로)
   - 공통 예외 부모 `common/exception/ApiException` + `common/web/ApiExceptionAdvice`. `OrderException`·`StoreException` 이 상속
   - `Stores.changeLogoImgUrl` 추가, `StoresRepository`·`StoresItemsRepository` 조회 메서드 추가
-  - 남은 것(TODO 주석): 영업 종료, 영업 시간 수정, 재고 조정, 판매 종료, 상품별 예약 현황, 지역별 조회(위치 컬럼 설계 선행)
+  - [x] 점주 기능 (2026-10-09) — 모두 `/api/owner/stores/{storeUid}` 아래, BUSINESS_OWNER, 남의 가게·상품은 404 (1.5). 설계는 [ADR-0004 9절](./adr/0004-reservation-path.md)
+    - `PATCH /{storeUid}` 본문 `{ openAt, closeAt }` → 200 `StoreResponse`. 생성과 같은 검증(open < close, 아니면 400)
+    - `POST /{storeUid}/shutdown` → 200 `StoreResponse`. 활성 주문(PENDING·APPROVED·READY_FOR_PICKUP) 이 가게의 상품 어디에든 있으면 409 "진행 중인 예약이 있어 영업을 종료할 수 없습니다.", 이미 종료면 409. 예약을 대신 정리하지 않는다
+    - `PATCH /{storeUid}/items/{itemUid}/quantity` 본문 `{ initialQuantity }`(0 ~ 10,000) → 200 `ItemResponse`. 잡힌 수량(활성 + 픽업 완료) 보다 적으면 409 "이미 예약된 수량보다 적게 줄일 수 없습니다.", `remaining` 은 같은 폭으로. `StockDeductionStrategy.adjust` 훅 — DB 전략은 상품 행 `FOR UPDATE` 후 판정, redis 는 `stock-adjust.lua`(줄임은 커밋 전 판정·롤백 시 되돌림, 늘림은 커밋 후 `INCRBY`, 키 없으면 커밋 전 워밍업)
+    - `POST /{storeUid}/items/{itemUid}/close` → 200 `ItemResponse`. `lastOrderTime = now` (별도 플래그 없음, 예약 생성의 판매 조건을 그대로 씀). 이미 지났으면 409 "이미 판매가 종료된 상품입니다."
+    - `GET /{storeUid}/items/{itemUid}/orders?state=PENDING` (state 선택) → 200 `List<OrderResponse>`, `forOwner`(픽업 코드 없음), 최신 순
+    - 판매 종료·영업 종료는 커밋 후 `ItemSaleCache` 항목을 지운다. 다른 인스턴스는 최대 5초 늦음
+    - 단위 `StoreServiceTest`·`StoreItemServiceTest`·`StockDeductionStrategyTest`·`RedisStockDeductionTest`, 통합 `OrderConcurrencyScenario`(세 전략: 늘린 뒤 예약, 잡힌 수량 미만 409, 예약 40 + 조정 5 동시에도 불변식, 활성 주문 있는 영업 종료 409, 판매 종료 후 예약 불가)
+  - [x] 공개 가게 목록 `GET /api/stores` (2026-10-09) — 영업 종료되지 않은 가게, 최신 순 최대 50개 (페이징 파라미터 없음). 기존 `GET /api/stores/**` permitAll 이 경로 끝 `/api/stores` 도 덮는 것을 `SecurityConfigTest` 로 확인, `StoreServiceTest` 단위
+  - [ ] 지역별 조회 — 위치 컬럼 설계 선행
 - [x] 부하 테스트 SQL 시드 — `IEUM_BE/scripts/sql/seed-loadtest.sql` (점주 1·가게 1·재고 100 상품 1·소비자 N, 기본 10,000 — 1인 1요청으로 "재고 100 / 요청 10,000" 을 맞춤. 소비자 1,000 이면 중복 활성 예약 검사가 요청 대부분을 걸러 재고 경합이 사라진다), `reset-loadtest.sql` (라운드 간 재고·주문 초기화). 실행은 호스트 mysql 이 아니라 `docker exec -i ieum-mysql mysql --default-character-set=utf8mb4` 파이프 (스크립트 상단 주석)
   - 고정 uid: 점주 `1111…`, 가게 `2222…`, 상품 `3333…`. 비밀번호는 전부 `password1`
   - 재실행 가능. 테이블은 서버를 한 번 기동해 Hibernate 가 만든 뒤여야 함
@@ -227,7 +240,7 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - [x] 동시 요청 사이의 틈 (2026-10-09) — pessimistic 은 잠금을 트랜잭션 첫 문장으로 두어 닫고, redis 는 Lua 의 활성 사용자 SET 으로 닫는다. optimistic 은 같은 행의 `@Version` 이 우연히 닫는다 (실측 0, ADR-0004 2절). conditional·naive 는 열려 있음
 - [x] `OrderState.EXPIRED` 추가, `UsersOrders.expire()` 전이 — `READY_FOR_PICKUP` 에서만 허용. 그 외 상태에서 예외로 둘지 무시할지는 Expiry Worker 구현 시 결정
 - [x] `UsersOrders` 에 `ready_at` 컬럼 추가 — `readyForPickup()` 호출 시 기록. 만료 판정 기준
-- [~] TTL 기반 예약 만료 — `ready_at + PICKUP_TTL`. 뼈대 생성 (2026-09-23): `OrderService.readyForPickup` 이 `ExpiryIndex.register(orderId, readyAt + pickupTtl)`, `pickUp`·`cancel` 이 `remove`. 전부 `afterCommit` 에 등록 (커밋 전 ZADD 는 롤백된 주문을 인덱스에 남긴다)
+- [~] TTL 기반 예약 만료 — `ready_at + PICKUP_TTL`. 뼈대 생성 (2026-09-23): `OrderService.readyForPickup` 이 `ExpiryIndex.register(orderId, readyAt + pickupTtl)`, `pickUp` 이 `remove` (READY 는 소비자 취소가 막혀 `cancel` 에서는 빠짐, 2026-10-09). 전부 `afterCommit` 에 등록 (커밋 전 ZADD 는 롤백된 주문을 인덱스에 남긴다)
 - [~] Sorted Set + Expiry Worker (Keyspace Notification 에 의존하지 않음) — 뼈대 생성 (2026-09-23). `ieum-api` / `orders/expiry/`
   - `ExpiryIndex` — `orders:expiry` ZSET, member = orderId, score = 만료 시각 epoch 초. `register`·`remove`(커밋 후)·`pollDue(now, limit)`
   - `ExpiryWorker` — `@Scheduled(fixedDelay = EXPIRY_POLL_INTERVAL, 기본 PT5S)`. `OrderService.expire(orderId)` 호출 후 ZREM. `InvalidOrderState`·`OrderNotFound` 는 건너뛰고 ZREM, 그 외 예외는 인덱스에 남겨 다음 주기 재시도. 카운터 `order.expiry{outcome=expired|skipped|failed}`
@@ -243,6 +256,10 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
   - [x] 복구 상한 검사 — 기대값이 DB 주문 상태로 계산되므로 정정 자체가 상한을 지킨다. 전체 상품 순회는 100건 페이징
 - [x] 픽업 코드 발급 및 검증 (2026-10-09) — `readyForPickup` 시 `PickupCodeIssuer`(SecureRandom 6자리) 로 발급해 `users_orders.pickup_code` 에 저장. 소비자 조회 응답에만 싣고 점주 응답(`OrderResponse.forOwner`) 에는 싣지 않음. `POST /api/owner/orders/{id}/pickup` 본문 `{ pickupCode }`, 불일치 400 `PickupCodeMismatch`, 비교는 `MessageDigest.isEqual`
 - [x] 점주 거절 (2026-10-09) — `POST /api/owner/orders/{id}/reject`. PENDING 에서만 허용, `CANCELED` + 재고 복구 (README 의 CANCELED 정의 "사용자 또는 점주 취소" 를 따름)
+- [x] 소비자 취소 정책 (2026-10-09 결정) — **PENDING·APPROVED 만 취소 가능, READY_FOR_PICKUP 은 불가(409 `InvalidOrderStateException`)**. 가게가 이미 준비했으므로 소비자가 물리지 않는다. 찾아가지 않으면 PICKUP_TTL 뒤 EXPIRED + 재고 복구
+  - `UsersOrders.cancel()` 이 두 상태만 허용. `reject()`(PENDING)·`cancelUnapproved()`(PENDING) 는 그대로
+  - 취소 가능한 상태에는 만료 인덱스가 없으므로 `OrderService.cancel` 의 `ExpiryIndex.remove` 제거
+  - `OrderServiceTest`(APPROVED 취소 성공, READY 취소 409·재고 그대로), 통합(세 전략)
 
 ---
 
