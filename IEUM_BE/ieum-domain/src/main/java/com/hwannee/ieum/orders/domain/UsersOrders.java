@@ -8,6 +8,8 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.LocalDateTime;
 
@@ -49,7 +51,8 @@ public class UsersOrders extends BaseTimeEntity {
     @Column(name = "idempotency_key", length = 64, updatable = false)
     private String idempotencyKey;
 
-    // TODO(2.2 픽업 코드): pickup_code 컬럼 추가. readyForPickup() 시 발급, pickUp() 시 검증
+    @Column(name = "pickup_code", length = 6)
+    private String pickupCode;
 
     @Version
     private Long version;
@@ -68,10 +71,19 @@ public class UsersOrders extends BaseTimeEntity {
         this.orderState = OrderState.APPROVED;
     }
 
-    public void readyForPickup() {
+    public void readyForPickup(String pickupCode) {
         require(OrderState.APPROVED, "준비 완료 처리");
         this.orderState = OrderState.READY_FOR_PICKUP;
         this.readyAt = LocalDateTime.now();
+        this.pickupCode = pickupCode;
+    }
+
+    public boolean matchesPickupCode(String candidate) {
+        if (pickupCode == null || candidate == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(pickupCode.getBytes(StandardCharsets.UTF_8),
+                candidate.getBytes(StandardCharsets.UTF_8));
     }
 
     public void pickUp() {
@@ -83,6 +95,11 @@ public class UsersOrders extends BaseTimeEntity {
         if (!orderState.isActive()) {
             throw new InvalidOrderStateException(orderState, "취소");
         }
+        this.orderState = OrderState.CANCELED;
+    }
+
+    public void reject() {
+        require(OrderState.PENDING, "거절");
         this.orderState = OrderState.CANCELED;
     }
 
