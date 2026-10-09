@@ -17,7 +17,13 @@ async function parseError(res: Response): Promise<ApiError> {
   } catch {
     problem = null
   }
-  return new ApiError(res.status, problem, `요청에 실패했습니다 (${res.status})`)
+  const retryAfter = Number(res.headers.get('Retry-After'))
+  return new ApiError(
+    res.status,
+    problem,
+    `요청에 실패했습니다 (${res.status})`,
+    Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : null,
+  )
 }
 
 async function send<T>(base: string, path: string, options: RequestOptions): Promise<T> {
