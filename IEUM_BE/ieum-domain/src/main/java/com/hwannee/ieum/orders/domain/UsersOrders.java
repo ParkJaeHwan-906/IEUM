@@ -13,8 +13,10 @@ import java.time.LocalDateTime;
 
 @Entity
 @Getter
-@Table(name = "users_orders", uniqueConstraints = @UniqueConstraint(
-        name = "uk_users_orders_account_idempotency_key", columnNames = {"user_account_id", "idempotency_key"}))
+@Table(name = "users_orders",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_users_orders_account_idempotency_key", columnNames = {"user_account_id", "idempotency_key"}),
+        indexes = @Index(name = "idx_users_orders_state_created", columnList = "order_state, created_at"))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class UsersOrders extends BaseTimeEntity {
 
@@ -81,6 +83,11 @@ public class UsersOrders extends BaseTimeEntity {
         if (!orderState.isActive()) {
             throw new InvalidOrderStateException(orderState, "취소");
         }
+        this.orderState = OrderState.CANCELED;
+    }
+
+    public void cancelUnapproved() {
+        require(OrderState.PENDING, "미승인 자동 취소");
         this.orderState = OrderState.CANCELED;
     }
 
