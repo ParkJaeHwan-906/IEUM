@@ -69,7 +69,8 @@ class RedisStockDeductionTest {
         registry = new SimpleMeterRegistry();
         OrderProperties properties = new OrderProperties(Duration.ofMinutes(15),
                 new OrderProperties.Retry(3, Duration.ofMillis(10)),
-                new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5));
+                new OrderProperties.Idempotency(Duration.ofDays(1), Duration.ofSeconds(30)), Duration.ofSeconds(5),
+                Duration.ofMinutes(5));
         strategy = new RedisStockDeduction(redis, items, orders, properties, registry);
     }
 
