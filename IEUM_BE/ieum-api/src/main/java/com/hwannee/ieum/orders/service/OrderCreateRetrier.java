@@ -8,7 +8,9 @@ import com.hwannee.ieum.orders.web.dto.OrderResponse;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Component;
 
@@ -17,7 +19,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 
 @Component
-public class OrderCreateRetrier {
+@ConditionalOnExpression("!'${ieum.stock.strategy:naive}'.equals('redis')")
+public class OrderCreateRetrier implements OrderCreator {
 
     private final OrderService orderService;
     private final StockDeductionStrategy stock;
@@ -42,6 +45,7 @@ public class OrderCreateRetrier {
                 .register(registry);
     }
 
+    @Override
     public OrderResponse create(AuthenticatedUser user, CreateOrderRequest request, String idempotencyKey) {
         for (int attempt = 1; ; attempt++) {
             try {
@@ -49,6 +53,8 @@ public class OrderCreateRetrier {
                 success.increment();
                 attemptsUsed.record(attempt);
                 return response;
+            } catch (DataIntegrityViolationException e) {
+                return orderService.replay(user, request.itemUid(), idempotencyKey);
             } catch (OptimisticLockingFailureException | CannotAcquireLockException e) {
                 (e instanceof CannotAcquireLockException ? deadlock : conflict).increment();
                 if (attempt >= retry.maxAttempts()) {
