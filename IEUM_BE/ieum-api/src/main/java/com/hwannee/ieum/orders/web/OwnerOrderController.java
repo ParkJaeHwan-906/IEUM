@@ -44,6 +44,4 @@ public class OwnerOrderController {
     public OrderResponse reject(@CurrentUser AuthenticatedUser owner, @PathVariable Long orderId) {
         return orderService.reject(owner, orderId);
     }
-
-    // TODO(점주 기능): GET /api/owner/items/{itemUid}/orders — 상품별 예약 현황 (README Merchant 기능)
 }
