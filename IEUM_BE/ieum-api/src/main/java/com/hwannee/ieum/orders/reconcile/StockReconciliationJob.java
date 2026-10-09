@@ -1,6 +1,9 @@
 package com.hwannee.ieum.orders.reconcile;
 
+import com.hwannee.ieum.orders.config.OrderProperties;
 import com.hwannee.ieum.orders.domain.OrderState;
+import com.hwannee.ieum.orders.domain.UsersOrders;
+import com.hwannee.ieum.orders.expiry.ExpiryIndex;
 import com.hwannee.ieum.orders.repository.UsersOrdersRepository;
 import com.hwannee.ieum.orders.stock.StockKeys;
 import com.hwannee.ieum.stores.domain.StoresItems;
@@ -10,67 +13,153 @@ import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.LocalDateTime;
 import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
-// redis 전략의 원장 stock:{itemId} 를 DB 주문 상태로 다시 계산해 대조한다. 재고의 진실은 Redis 값이 아니라 DB 주문 상태다 (ADR-0003).
-//   기대값 = initial − 활성 주문 수량 − 픽업 완료 수량. 불변식 initial = remaining + active + pickedUp 의 remaining 을 푼 것
-// 지금은 탐지만 한다. 어긋난 건수를 stock.reconciliation{outcome=mismatch} 로 올리고 WARN 을 남긴다.
-// TODO(2.2 Reconciliation 정정): 어긋나면 SET stock:{id} 기대값. 단, 대조 사이에 들어온 예약(Lua 차감) 과 경합하므로
-//   "DB 스냅샷 시각 이후의 차감" 을 어떻게 셀지 정한 뒤 켠다. 후보: 상품별 짧은 정지 플래그 / 기대값과 현재값의 차이가 임계 이상일 때만
-// TODO(2.2 DB 투영 갱신): stores_items.remaining_quantity = 기대값 으로 UPDATE. 워밍업(SET NX) 이 이 열에서 값을 가져오므로 투영이 최신이어야 재기동이 안전
-// TODO(2.2 만료 누락): findReadyForPickupBefore(now − PICKUP_TTL) 로 인덱스에서 빠진 만료 후보를 찾아 ExpiryIndex 에 다시 등록
-// TODO(4 관측): mismatch 건수를 README Reservation Correctness 대시보드의 "재고 불일치" 로. 전체 상품 순회는 페이징 필요
 @Component
 @ConditionalOnProperty(name = "ieum.stock.strategy", havingValue = "redis")
 public class StockReconciliationJob {
 
     private static final Logger log = LoggerFactory.getLogger(StockReconciliationJob.class);
+    private static final int PAGE_SIZE = 100;
+    private static final Set<OrderState> HELD = EnumSet.of(
+            OrderState.PENDING, OrderState.APPROVED, OrderState.READY_FOR_PICKUP, OrderState.PICKED_UP);
+
+    record Drift(long expected, long actual, Set<String> extraMembers, Set<String> missingMembers) {
+
+        long stockDelta() {
+            return expected - actual;
+        }
+
+        boolean isEmpty() {
+            return stockDelta() == 0 && extraMembers.isEmpty() && missingMembers.isEmpty();
+        }
+    }
 
     private final StoresItemsRepository items;
     private final UsersOrdersRepository orders;
     private final StringRedisTemplate redis;
+    private final ExpiryIndex expiryIndex;
+    private final OrderProperties properties;
+    private final TransactionTemplate tx;
+    private final Map<Long, Drift> previous = new ConcurrentHashMap<>();
     private final Counter checked;
     private final Counter mismatch;
     private final Counter missing;
+    private final Counter corrected;
+    private final Counter requeued;
 
     public StockReconciliationJob(StoresItemsRepository items, UsersOrdersRepository orders,
-                                  StringRedisTemplate redis, MeterRegistry registry) {
+                                  StringRedisTemplate redis, ExpiryIndex expiryIndex, OrderProperties properties,
+                                  PlatformTransactionManager transactionManager, MeterRegistry registry) {
         this.items = items;
         this.orders = orders;
         this.redis = redis;
+        this.expiryIndex = expiryIndex;
+        this.properties = properties;
+        this.tx = new TransactionTemplate(transactionManager);
         this.checked = outcome(registry, "checked");
         this.mismatch = outcome(registry, "mismatch");
         this.missing = outcome(registry, "missing");
+        this.corrected = outcome(registry, "corrected");
+        this.requeued = outcome(registry, "requeued");
     }
 
     @Scheduled(fixedDelayString = "${ieum.order.reconciliation.interval:PT60S}")
-    @Transactional(readOnly = true)
     public void run() {
-        for (StoresItems item : items.findAll()) {
-            check(item);
-        }
+        Page<StoresItems> page;
+        int number = 0;
+        do {
+            PageRequest request = PageRequest.of(number++, PAGE_SIZE, Sort.by("id"));
+            page = items.findAll(request);
+            for (StoresItems item : page) {
+                tx.executeWithoutResult(status -> check(item.getId()));
+            }
+        } while (page.hasNext());
+        tx.executeWithoutResult(status -> requeueMissedExpiries());
     }
 
-    void check(StoresItems item) {
-        long reserved = orders.sumQuantityByItemAndStates(item.getId(), OrderState.ACTIVE)
-                + orders.sumQuantityByItemAndStates(item.getId(), EnumSet.of(OrderState.PICKED_UP));
-        long expected = item.getInitialQuantity() - reserved;
-        String actual = redis.opsForValue().get(StockKeys.stock(item.getId()));
+    void check(Long itemId) {
+        StoresItems item = items.findById(itemId).orElse(null);
+        if (item == null) {
+            previous.remove(itemId);
+            return;
+        }
+        long expected = item.getInitialQuantity() - orders.sumQuantityByItemAndStates(itemId, HELD);
+        Set<String> expectedMembers = new HashSet<>(orders.findAccountUidsByItemAndStates(itemId, OrderState.ACTIVE));
+        if (item.getRemainingQuantity() != expected) {
+            items.overwriteRemainingQuantity(itemId, (int) expected);
+        }
+
+        String actual = redis.opsForValue().get(StockKeys.stock(itemId));
         checked.increment();
         if (actual == null) {
             missing.increment();
+            previous.remove(itemId);
             return;
         }
-        if (Long.parseLong(actual) != expected) {
-            mismatch.increment();
-            log.warn("재고 불일치: itemId={} expected={} redis={} dbProjection={}",
-                    item.getId(), expected, actual, item.getRemainingQuantity());
+        Set<String> actualMembers = redis.opsForSet().members(StockKeys.active(itemId));
+        Drift now = drift(expected, Long.parseLong(actual), expectedMembers,
+                actualMembers == null ? Set.of() : actualMembers);
+        if (now.isEmpty()) {
+            previous.remove(itemId);
+            return;
         }
+
+        mismatch.increment();
+        Drift before = previous.put(itemId, now);
+        log.warn("재고 불일치: itemId={} expected={} redis={} drift={} persisted={}",
+                itemId, expected, actual, now, now.equals(before));
+        if (now.equals(before)) {
+            correct(itemId, now);
+            previous.remove(itemId);
+        }
+    }
+
+    void requeueMissedExpiries() {
+        LocalDateTime threshold = LocalDateTime.now().minus(properties.pickupTtl());
+        List<UsersOrders> overdue = orders.findReadyForPickupBefore(threshold);
+        for (UsersOrders order : overdue) {
+            expiryIndex.register(order.getId(), order.getReadyAt().plus(properties.pickupTtl()));
+            requeued.increment();
+        }
+    }
+
+    private void correct(Long itemId, Drift drift) {
+        if (drift.stockDelta() != 0) {
+            redis.opsForValue().increment(StockKeys.stock(itemId), drift.stockDelta());
+            corrected.increment();
+        }
+        if (!drift.extraMembers().isEmpty()) {
+            redis.opsForSet().remove(StockKeys.active(itemId), drift.extraMembers().toArray());
+            corrected.increment();
+        }
+        if (!drift.missingMembers().isEmpty()) {
+            redis.opsForSet().add(StockKeys.active(itemId), drift.missingMembers().toArray(String[]::new));
+            corrected.increment();
+        }
+    }
+
+    private static Drift drift(long expected, long actual, Set<String> expectedMembers, Set<String> actualMembers) {
+        Set<String> extra = new HashSet<>(actualMembers);
+        extra.removeAll(expectedMembers);
+        Set<String> lost = new HashSet<>(expectedMembers);
+        lost.removeAll(actualMembers);
+        return new Drift(expected, actual, extra, lost);
     }
 
     private static Counter outcome(MeterRegistry registry, String outcome) {
