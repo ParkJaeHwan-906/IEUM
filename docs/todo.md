@@ -278,8 +278,11 @@ Docker 없이 도는 테스트만 두었다 (`@WebMvcTest` + 순수 단위). `co
 ## 4. 관측 및 확장
 
 - [x] Actuator + Micrometer — `/actuator/prometheus` 노출, 예약·재고·만료·Reconciliation 카운터 (2026-09-14 ~ 10-09)
-- [ ] Prometheus / Grafana
-- [ ] 불변식 검증 지표 — 초과 예약 0건, 재고 복구 1회
+- [x] Prometheus + Grafana (2026-10-09) — compose profile `monitoring` (9090 / 3001), 두 서버 `/actuator/prometheus` 5초 스크레이프. ieum-auth 에도 Prometheus 레지스트리 추가. [모니터링 가이드](./guides/monitoring-guide.md)
+- [x] 예약 정합성 대시보드 `IEUM 예약 정합성` 프로비저닝 — 정합성(0 이어야 하는 값)·처리(요청률, 평균·p99·최대 지연, 재시도 결과)·자원(Hikari, Lua, 힙). `http.server.requests` 히스토그램 버킷 5ms~30s 활성화
+- [ ] 불변식 위반 경보 규칙 — `increase(stock_reconciliation_total{outcome="corrected"}[5m]) > 0`, `release_failed` 등
+- [ ] 관리 포트(`management.server.port`) 분리 — 지금 `/actuator/prometheus` 가 인증 없이 열려 있음
+- [x] 불변식 검증 지표 — 대시보드 정합성 줄 (Reconciliation mismatch·corrected, release_failed, 만료·승인 타임아웃 실패)
 - [x] k6 부하 테스트 시나리오 (재고 100 / 요청 10,000) — `IEUM_BE/scripts/k6/create-order.js` (2026-09-12). 로그인은 `setup()` 에서 `http.batch` 로 병렬 처리, `shared-iterations` 로 소비자 1인 1요청
   - k6 는 호스트에 winget 으로 설치 (v2.2.0). 서버가 호스트에서 돌고 있어 컨테이너 k6 보다 변수가 적다. 컨테이너로 옮길 때는 `AUTH_URL`/`API_URL` 을 `host.docker.internal` 로
   - `setup()` 반환값은 VU 마다 복사되므로 VU 100 을 상한으로 둔다. 더 올리려면 토큰을 파일로 뽑아 `SharedArray` 로 읽는 방식으로
