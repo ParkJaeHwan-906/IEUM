@@ -28,8 +28,10 @@ import java.time.Instant;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.BDDMockito.then;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.never;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -75,7 +77,20 @@ class RoleAccessTest {
     @Test
     void 소비자_토큰으로_점주_가게_API_를_부르면_403() throws Exception {
         expectForbidden(get("/api/owner/stores/me"), CONSUMER_TOKEN);
+        expectForbidden(post("/api/owner/stores/s-1/shutdown"), CONSUMER_TOKEN);
+        expectForbidden(post("/api/owner/stores/s-1/items/i-1/close"), CONSUMER_TOKEN);
+        expectForbidden(get("/api/owner/stores/s-1/items/i-1/orders"), CONSUMER_TOKEN);
+        expectForbidden(patch("/api/owner/stores/s-1/items/i-1/quantity")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"initialQuantity\":1}"), CONSUMER_TOKEN);
+        expectForbidden(patch("/api/owner/stores/s-1")
+                .contentType(MediaType.APPLICATION_JSON).content("{\"openAt\":\"09:00\",\"closeAt\":\"21:00\"}"),
+                CONSUMER_TOKEN);
         then(storeService).should(never()).findMine(any());
+        then(storeService).should(never()).shutdown(any(), any());
+        then(storeService).should(never()).changeBusinessHours(any(), any(), any());
+        then(storeItemService).should(never()).adjustQuantity(any(), any(), any(), anyInt());
+        then(storeItemService).should(never()).close(any(), any(), any());
+        then(storeItemService).should(never()).findOrders(any(), any(), any(), any());
     }
 
     @Test
