@@ -9,6 +9,22 @@ public final class StockKeys {
     }
 
     public static String stock(Long itemId) {
-        return STOCK_PREFIX + itemId;
+        return STOCK_PREFIX + slot(itemId);
+    }
+
+    public static String active(Long itemId) {
+        return stock(itemId) + ":active";
+    }
+
+    public static String idempotency(Long itemId, String userUid, String idempotencyKey) {
+        return stock(itemId) + ":idem:" + userUid + ":" + idempotencyKey;
+    }
+
+    public static String restored(Long itemId, Long orderId) {
+        return stock(itemId) + ":restored:" + orderId;
+    }
+
+    private static String slot(Long itemId) {
+        return "{" + itemId + "}";
     }
 }
